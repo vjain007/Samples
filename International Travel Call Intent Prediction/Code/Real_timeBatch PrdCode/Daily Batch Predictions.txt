@@ -1,0 +1,250 @@
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from pyspark.sql.functions import udf
+from pyspark.ml.feature import *
+import pandas as pd
+from pyspark.sql import SparkSession
+from pyspark.ml import Pipeline, PipelineModel
+from pyspark.ml.classification import  RandomForestClassifier,RandomForestClassificationModel
+import numpy as np
+from pyspark.ml.linalg import *
+from pyspark.ml.linalg import Vectors, VectorUDT
+import matplotlib.pyplot as plt
+import pickle
+import sys
+
+if __name__ == "__main__":
+    # $example on:init_session$
+    # $example off:init_session$
+
+    spark = SparkSession\
+        .builder\
+        .appName("Pandas")\
+        .config("hive.exec.dynamic.partition", "true")\
+        .config("hive.exec.dynamic.partition.mode", "nonstrict")\
+        .enableHiveSupport()\
+        .getOrCreate()
+
+    spark.conf.set("spark.sql.execution.arrow.enabled", "true")
+    spark.sql("""use vzw_soi_prd_tbls""")
+    features_test = spark.sql("select CURRENT_TIMESTAMP as call_start_tm_stmp,mva_last_session_time as mva_last_pg_vst_time,mvo_last_session_time as mvo_last_pg_vst_time,* from VZW_SOI_PRD_TBLS.vzsoi_intl_dly_scoring_batch_rtm_tbl_auto where process_dt= CURRENT_DATE  ")
+    #features_test.dtypes
+    ##Follow this article, it will explain how adding the noise from unnecessry features will help in capturing better feature representation
+    #https://arxiv.org/pdf/1904.07199.pdf
+    features=features_test.select('mtn','msg_allow_share_ind','data_allow_share_ind','voice_allow_share_ind','lst_session_mfapp_activate_tp_ind','lst_session_mfapp_billing_ind',
+                               'lst_session_mfapp_cruise_ind','lst_session_mfapp_usage_ind','lst_session_mfapp_support_ind',
+                               'lst_session_mfapp_can_mex_ind','lst_session_mfapp_tp_enquiry_ind','lst_session_mfapp_countries_ind',
+                               'lst_session_mfapp_disable_tp_ind','mvo_activate_tp_ind','mvo_intl_billing_ind','mvo_tripplanner_ind',
+                               'mvo_cruise_ind','mvo_tp_video_ind','mvo_usage_ind','mvo_faq_international_ind',
+                               'mvo_device_support_ind','mvo_faq_general_ind','mvo_faq_outsideus_ind','mvo_settings_ind','mvo_can_mex_ind',
+                               'mvo_unlimitedplans_ind','mvo_tp_enquiry_ind','mvo_last_pg_vst_time','mva_activate_tp_ind','mva_intl_billing_ind','mva_cruise_ind',
+                               'mva_usage_ind','mva_device_support_ind','mva_can_mex_ind','mva_tp_enquiry_ind','mva_countries_ind','mva_disable_tp_ind',
+                               'mva_devices_ind','mva_last_pg_vst_time','lst_session_activate_tp_ind','lst_session_billing_ind','lst_session_tripplanner_ind',
+                               'lst_session_cruise_ind','lst_session_tp_video_vstd_ind','lst_session_usage_ind','lst_session_faq_international_ind','lst_session_device_support_ind',
+                               'lst_session_faq_general_ind','lst_session_faq_outsideus_ind','lst_session_settings_ind','lst_session_can_mex_ind','lst_session_unlimitedplan_ind',
+                               'lst_session_tp_enquiry_ind','lst_session_faq_prepaid_ind','pplan_eff_dt','access_amt','data_access_amt','bi_pplan_ctgry_desc',
+                               'bi_data_allow_tier_value','svc_prod_desc1','svc_prod_desc2','svc_prod_desc3','mtrans_ts1','mtrans_ts2','mtrans_ts3','max_svc_prod_eff_dt1','free_plan','line_type',
+                               'tvl_pass_included','can_mex_free_plan','region_desc','call_start_tm_stmp','bill_cycle_dt',
+                               'feat_amt','pymnt_recvd_amt','bill_bal_amt','bill_curr_amt','LATE_PYMNT_CHRG_AMT',
+                               'bill_6_mth_avg','occ_reasons','trans_dt','agg_occ_value','occ_amt',
+                               'prev_agg_occ_value','prev_feat_amt','prev_due_amt','prev_pymnt_recvd_amt',
+                               'prev_bill_bal_amt','prev_late_pymnt_chrg_amt','prev_occ_amt','prev_bill_curr_amt','prev_trans_dt',
+                               'total_data_allow','plan_data_allow','bonus_data_allow','tenure','call_ts1',
+                               'call_ts2','call_ts3','call_ts4','call_ts5','call_ts6','call_ts7','call_ts8','call_ts9','call_ts10',
+                               'primary1_topic','primary2_topic','primary3_topic','primary4_topic',
+                               'primary5_topic','primary6_topic','primary7_topic','primary8_topic','primary9_topic','primary10_topic',
+                               'tvl1','tvl2','tvl3','tvl4','tvl5','tvl6','tvl7','tvl8','tvl9','tvl10',
+                               'ccd1','ccd2','ccd3','ccd4','ccd5','ccd6','ccd7','ccd8','ccd9','ccd10',
+                               'prev_tvl_count','prev_call_count','pplan_bndl_type_cd','alert_type','MSG_TIMESTAMP')
+    filter_site_columns=['lst_session_mfapp_activate_tp_ind','lst_session_mfapp_billing_ind',
+                               'lst_session_mfapp_cruise_ind','lst_session_mfapp_usage_ind','lst_session_mfapp_support_ind',
+                               'lst_session_mfapp_can_mex_ind','lst_session_mfapp_tp_enquiry_ind','lst_session_mfapp_countries_ind',
+                               'lst_session_mfapp_disable_tp_ind','mvo_activate_tp_ind','mvo_intl_billing_ind','mvo_tripplanner_ind',
+                               'mvo_cruise_ind','mvo_tp_video_ind','mvo_usage_ind','mvo_faq_international_ind',
+                               'mvo_device_support_ind','mvo_faq_general_ind','mvo_faq_outsideus_ind',
+                               'mvo_settings_ind','mvo_can_mex_ind','mvo_unlimitedplans_ind',
+                               'mvo_tp_enquiry_ind', 'mva_activate_tp_ind','mva_intl_billing_ind','mva_cruise_ind',
+                               'mva_usage_ind','mva_device_support_ind','mva_can_mex_ind','mva_tp_enquiry_ind','mva_countries_ind','mva_disable_tp_ind',
+                               'mva_devices_ind','lst_session_activate_tp_ind','lst_session_billing_ind','lst_session_tripplanner_ind',
+                               'lst_session_cruise_ind','lst_session_tp_video_vstd_ind','lst_session_usage_ind',
+                               'lst_session_faq_international_ind','lst_session_device_support_ind',
+                               'lst_session_faq_general_ind','lst_session_faq_outsideus_ind',
+                               'lst_session_settings_ind','lst_session_can_mex_ind','lst_session_unlimitedplan_ind',
+                               'lst_session_tp_enquiry_ind','lst_session_faq_prepaid_ind']
+    filter_real_time=['lst_session_mfapp_activate_tp_ind','lst_session_mfapp_billing_ind',
+                               'lst_session_mfapp_cruise_ind','lst_session_mfapp_usage_ind','lst_session_mfapp_support_ind',
+                               'lst_session_mfapp_can_mex_ind', 'lst_session_mfapp_tp_enquiry_ind','lst_session_mfapp_countries_ind',
+                               'lst_session_mfapp_disable_tp_ind','lst_session_activate_tp_ind','lst_session_billing_ind','lst_session_tripplanner_ind',
+                               'lst_session_cruise_ind','lst_session_tp_video_vstd_ind','lst_session_usage_ind',
+                               'lst_session_faq_international_ind','lst_session_device_support_ind',
+                               'lst_session_faq_general_ind','lst_session_faq_outsideus_ind',
+                               'lst_session_settings_ind','lst_session_can_mex_ind','lst_session_unlimitedplan_ind',
+                               'lst_session_tp_enquiry_ind','lst_session_faq_prepaid_ind']
+    filter_batch_time=['mvo_activate_tp_ind','mvo_intl_billing_ind','mvo_tripplanner_ind',
+                               'mvo_cruise_ind','mvo_tp_video_ind','mvo_usage_ind','mvo_faq_international_ind',
+                               'mvo_device_support_ind','mvo_faq_general_ind','mvo_faq_outsideus_ind',
+                               'mvo_settings_ind','mvo_can_mex_ind','mvo_unlimitedplans_ind',
+                               'mvo_tp_enquiry_ind','mva_activate_tp_ind','mva_intl_billing_ind','mva_cruise_ind',
+                               'mva_usage_ind','mva_device_support_ind',
+                               'mva_can_mex_ind','mva_tp_enquiry_ind','mva_countries_ind','mva_disable_tp_ind',
+                               'mva_devices_ind']
+
+    for i in filter_site_columns:
+        features = features.withColumn('{}'.format(i),when(col('{}'.format(i)).isNull(),0.0).otherwise(col('{}'.format(i))))
+        features = features.withColumn('{}'.format(i), features['{}'.format(i)].cast(FloatType()))
+
+    date_columns=['pplan_eff_dt','mtrans_ts1','mtrans_ts2','mtrans_ts3','max_svc_prod_eff_dt1',
+             'bill_cycle_dt','trans_dt','prev_trans_dt','call_ts1','call_ts2','call_ts3','call_ts4','call_ts5','call_ts6','call_ts7','call_ts8','call_ts9','call_ts10',
+              'tvl1','tvl2','tvl3','tvl4','tvl5','tvl6','tvl7','tvl8','tvl9','tvl10',
+              'MSG_TIMESTAMP','mvo_last_pg_vst_time','mva_last_pg_vst_time']
+
+    features=features.drop_duplicates()
+    date_diff=[-float("inf"),0.0,2.0,7.0,30.0,60.0,90.0,180.0,float("inf")]
+    date_splits={}
+    date_bucketizer={}
+    for i in date_columns:
+        features=features.withColumn('call_{}'.format(i),datediff('call_start_tm_stmp','{}'.format(i)))
+        features=features.withColumn('call_{}'.format(i),when(col('call_{}'.format(i))<0,None).otherwise(col('call_{}'.format(i))))
+        #date_splits[i]=[-float("inf")]+np.unique(features.approxQuantile('call_{}'.format(i),(date_diff),thsld)).tolist()+[float("inf")]
+        date_bucketizer[i] = Bucketizer.load('hdfs://polarisgq-nn1.gq.vcg.yahoo.com:8020/user/svc_vzw_soi_pld/Intl_call_prediction_files/intl_feb_mr_2020/model_object_02_26_2020/value_bucketizer_{}'.format(i))
+        features=date_bucketizer[i].transform(features)
+
+    double_columns=['prev_tvl_count','prev_call_count','bi_data_allow_tier_value']
+    features=features.withColumn('bill_shock',(col('bill_curr_amt')-col('bill_6_mth_avg'))/col('bill_6_mth_avg'))
+
+    ##Bill_30_day_amt, 90_day_amt and 180 _day_amt are not populated properly
+    float_columns=['access_amt', 'data_access_amt','feat_amt','pymnt_recvd_amt','bill_bal_amt','bill_curr_amt','bill_shock','LATE_PYMNT_CHRG_AMT',
+                               'agg_occ_value','occ_amt','prev_agg_occ_value','prev_feat_amt','prev_due_amt','prev_pymnt_recvd_amt',
+                               'prev_bill_bal_amt','prev_late_pymnt_chrg_amt','prev_occ_amt','prev_bill_curr_amt']
+    #payment revrs_amt is not considered becuase it rarely has values
+
+    value_columns=float_columns+double_columns
+    for i in value_columns:
+        if i in double_columns:
+            features = features.withColumn('{}'.format(i), features['{}'.format(i)].cast(DoubleType()))
+        else:
+            features = features.withColumn('{}'.format(i), features['{}'.format(i)].cast(FloatType()))
+
+    #float_columns_ab=['bill_shock','agg_occ_value','prev_agg_occ_value','occ_amt','prev_occ_amt']
+    for i in float_columns:
+        features=features.withColumn('{}'.format(i), when(col('{}'.format(i))<0.0,0.0).otherwise(col('{}'.format(i))))
+
+    #Requires More Data to normalize these columns, but a good split value_diff
+    value_splits={}
+    value_bucketizer={}
+    value_columns=float_columns+double_columns
+    for i in value_columns:
+        value_bucketizer[i] = Bucketizer.load('hdfs://polarisgq-nn1.gq.vcg.yahoo.com:8020/user/svc_vzw_soi_pld/Intl_call_prediction_files/intl_feb_mr_2020/model_object_02_26_2020/value_bucketizer_{}'.format(i))
+        features=value_bucketizer[i].transform(features)
+
+    value_mod=['{}_buckets'.format(x) for x in value_columns]
+    date_mod=['call_{}_buckets'.format(x) for x in date_columns]
+
+    #! hdfs dfs -get hdfs://polarisgq-nn1.gq.vcg.yahoo.com:8020/user/kreddy01/call_intet_intl_prediction_experiment/model_object_02_26_2020/value_splits.pkl
+    import pickle
+    f = open("value_splits.pkl","rb")
+    value_splits=pickle.load(f)
+    f.close()
+
+    value_bucket_list={}
+    value_splits_list=list(value_splits.values())
+    for i,v in enumerate(value_mod):
+        value_bucket_list[v]=len(value_splits_list[i])
+        features=features.withColumn('{}'.format(v),when(col('{}'.format(v)).isNull(),value_bucket_list[v]).otherwise(col('{}'.format(v))))
+
+    for i,v in enumerate(date_mod):
+        date_bucket_max=len(date_diff)
+        features=features.withColumn('{}'.format(v),when(col('{}'.format(v)).isNull(),date_bucket_max).otherwise(col('{}'.format(v))))
+
+    #Documentation requried for categorical values
+    cat={}
+    cat['free_plan']=['free','paid']
+    cat['line_type']=['PRIMARY','SECONDARY']
+    cat['occ_reasons']=['data_usg_charges','General_reasons','International_charges','occ_trvlpass','ROAMING']
+    cat['tenure']=['1 YR to 2 YR','2 YR to 3 YR','3 YR+','Up to 1 Year']
+    cat['alert_type']=['BILL_SMS','Daypass_SMS','Data_SMS','International_SMS','TP_SMS']
+    for i in range(1,4):
+        cat['svc_prod_desc{}'.format(i)]=["INT'L HIGH SPEED DATA","TRAVELPASS","INTL TRAVEL VOICE & DATA PAYGO","INCLUDE CANADA/MEXICO"]
+    for i in range(1,11):
+        cat['primary{}_topic'.format(i)]=["BILLING","CRUISE","PHONE SETTINGS","PLAN & TRAVEL PASS"]
+        cat['ccd{}'.format(i)]=['CAN','MEX','GBR','BHS','JAM','DOM','FRA','ITA','CSP','ABW','DEU','ESP']
+    cat['msg_allow_share_ind']=['Y','N']
+    cat['data_allow_share_ind']=['Y','N']
+    cat['voice_allow_share_ind']=['Y','N']
+
+    features=features.withColumn('free_plan',lower(col('free_plan')))
+
+    cat_columns=[*cat.keys()]
+
+    fromlabelsModel={}
+    model_string={}
+    for i in cat_columns:
+        features=features.withColumn('{}'.format(i),when(col('{}'.format(i)).isin(*cat[i])==False,None).otherwise(col('{}'.format(i))))
+        #features=features.drop("indexed_{}".format(i))
+        #fromlabelsModel[i] = StringIndexer(inputCol="{}".format(i), outputCol="indexed_{}".format(i), handleInvalid="keep",stringOrderType="alphabetAsc")
+        #model_string[i]=fromlabelsModel[i].fit(features)
+        model_string[i]=StringIndexerModel.load('hdfs://polarisgq-nn1.gq.vcg.yahoo.com:8020/user/svc_vzw_soi_pld/Intl_call_prediction_files/intl_feb_mr_2020/model_object_02_26_2020/model_string_{}'.format(i))
+        features = model_string[i].transform(features)
+
+    for i in [*cat.keys()]:
+        for j,v in enumerate(cat[i]):
+            if i not in ['svc_prod_desc2','svc_prod_desc3']:
+                 features=features.withColumn('indexed_{}_ohe_numpy_{}'.format(i,j),when(col('indexed_{}'.format(i))==j,1.0).otherwise(0.0))
+            else:
+                if j<3:
+                    features=features.withColumn('indexed_{}_ohe_numpy_{}'.format(i,j),when(col('indexed_{}'.format(i))==j,1.0).otherwise(0.0))
+                else:
+                    pass
+
+    ohe_list = list(((filter(lambda x: ('ohe' in x), list(features.columns)))))
+
+    total_mod=['mtn']+ohe_list+filter_batch_time+date_mod+value_mod+filter_real_time
+
+    features_model=features.select(list(total_mod))
+
+    for i,v in enumerate(features_model.columns):
+        print(i,v)
+
+
+    #! hdfs dfs -get hdfs://polarisgq-nn1.gq.vcg.yahoo.com:8020/user/kreddy01/call_intet_intl_prediction_experiment/model_object_02_26_2020/rf_n_100_d_20.p
+    model_rf=pickle.load(open( "rf_n_100_d_20.p", "rb" ))
+
+    features_model=features_model.withColumn('current_dt_1msg',when(features_model.call_tvl1_buckets<=1.0,1).otherwise(0.0))
+
+    vec_assemble_features=ohe_list+filter_batch_time+date_mod+value_mod+filter_real_time+['current_dt_1msg']
+
+    for i,v in enumerate(vec_assemble_features):
+        print(i,v)
+
+
+    vec_assembler= VectorAssembler(inputCols=vec_assemble_features,outputCol="features_vec")
+
+    features_model=features_model.drop("features_vec")
+    features_model = vec_assembler.transform(features_model)
+    features_model.select('features_vec').show(10,truncate=False)
+
+    from pyspark.sql import functions as F
+
+    for col in vec_assemble_features:
+        features_model = features_model.withColumn(col,F.col(col).cast("double"))
+
+    udf_model=udf(lambda x :np.asscalar(model_rf.predict(np.array([x])).ravel()),FloatType())
+    features_model=features_model.withColumn('Prediction_Index',udf_model('features_vec'))
+    features_model.select('Prediction_Index').show(10)
+    features_model = features_model.withColumn('Prediction_Index', when(features_model.Prediction_Index ==2.0,'phone_settings').otherwise(features_model.Prediction_Index))
+    features_model = features_model.withColumn('Prediction_Index', when(features_model.Prediction_Index ==0.0,'billing').otherwise(features_model.Prediction_Index))
+    features_model = features_model.withColumn('Prediction_Index', when(features_model.Prediction_Index ==1.0,'cruise').otherwise(features_model.Prediction_Index))
+    features_model = features_model.withColumn('Prediction_Index', when(features_model.Prediction_Index ==3.0,'plan_travelpass').otherwise(features_model.Prediction_Index))
+    udf_proba=udf(lambda x :model_rf.predict_proba(np.array([x])).ravel(),ArrayType(FloatType()))
+    features_model=features_model.withColumn('normalised_probability',udf_proba('features_vec'))
+    udf_object_0=udf(lambda s: np.around(np.array([np.amax(np.array(s))]),decimals=5).tolist(),ArrayType(DoubleType()))
+    udf_object_1=udf(lambda s: float(s[0]),FloatType())
+
+    features_model = features_model.withColumn('max_probability',udf_object_1(udf_object_0('normalised_probability')))
+    features_model.select('mtn','max_probability','Prediction_Index').show(10)
+    features_model.createOrReplaceTempView("predictions_one_label_view")
+    #print(predictions_one_label_view)
+    spark.sql("INSERT overwrite table VZW_SOI_PRD_TBLS.vzsoi_intl_dly_scoring_tbl_auto partition (process_dt) \
+    SELECT mtn,Prediction_Index,max_probability, CURRENT_DATE as process_dt from predictions_one_label_view")
+    #CURRENT_DATE
+    spark.stop()

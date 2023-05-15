@@ -1,0 +1,267 @@
+DROP TABLE VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST;
+
+CREATE  TABLE VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST
+AS 
+SELECT DISTINCT
+A.CUST_ID,A.ACCT_NUM,A.CUST_LINE_SEQ_ID,A.MTN 
+FROM VZW_UDA_PRD_ALLVM.SUBS_SUM_FACT_V  AS A
+WHERE A.Rpt_mth =  TO_DATE('2020-02-01 00:00:00') 
+AND A.ending_customers = 1
+AND A.vsn_cust_type_cd = 'PE'
+AND A.rev_gen_ind = 'Y';
+
+
+Comments: This query takes the active customers at the first date of current month
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+DROP TABLE VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_TRAVEL_BASE;
+
+CREATE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_TRAVEL_BASE AS
+SELECT Z.* FROM
+(SELECT DISTINCT A.CUST_ID,A.ACCT_NUM,B.CUST_LINE_SEQ_ID,A.MTN,
+A.COUNTRY_CD,
+A.SMS_REQ_DT,
+A.SMS_REQ_TS,
+A.TVL_TS
+FROM (
+SELECT
+CUST_ID,
+ACCT_NUM,
+MTN,
+COUNTRY_CD,
+REQUEST_DT AS SMS_REQ_DT,
+REQUEST_TS AS SMS_REQ_TS,
+CAST(CONCAT(REQUEST_DT,' ',SUBSTR(REQUEST_TS,12,8)) AS STRING) AS TVL_TS
+FROM VZW_SOI_PRD_TBLS.vzsoi_semantic_travel_summary) AS A
+inner join 
+VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST AS B
+on TRIM(A.CUST_ID)=TRIM(B.CUST_ID)
+AND TRIM(A.ACCT_NUM)=TRIM(B.ACCT_NUM)
+AND TRIM(A.MTN)=TRIM(B.MTN))z
+WHERE Z.TVL_TS >= date_sub(current_timestamp(),7) 
+AND Z.TVL_TS <= current_timestamp()
+
+
+--WHERE A.request_DT >=date_sub(current_date(),30)
+--AND A.request_DT <=date_sub(current_date(),1))as A,
+
+
+Comments: This tables goes into the 1 msg table and picks up the travel details of all those customers that have received 1 msg (travelled in the last 7 days) that are currently active
+
+-------------------------------------------------------SCAT--------------------------------------
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_SCAT_DESC_BASE
+AS 
+select* from
+(
+select 
+b.cust_id,b.mtn,b.cust_line_seq_id,b.acct_num,
+a.session_start_date,
+a.pg_vst_timestamp,
+a.session_start_tm,
+a.tp_flag,
+a.subevent1,
+a.tp_categories,
+a.visit_country,
+a.page_timespent,
+a.process_dt
+from 
+(SELECT DISTINCT
+a.cust_id,
+a.mtn,
+--a.cust_line_seq_id,
+substr(a.date_time,1,10) as session_start_date,
+a.date_time as pg_vst_timestamp,
+a.session_start_tm,
+a.process_dt,
+tp_flag,
+timespent_pg,
+case when tp_flag=1 then
+case when a.chat_id!='' and tp_search_term_flag=1 then 'TP_Page-Chat_TP-Search'
+when tp_search_term_flag=1 then 'TP_Page-Search_TP'
+else 'TP_Page' end
+when tp_flag=0 and (lower(pagename) like '%cruise%' or lower(pagename) like '%bahamas%' or lower(pagename) like '%honduras%' or lower(pagename) like '%alaska%')  then 'Cruise_general_search'
+when tp_flag=0 and tp_search_term_flag=1 then 'Page_General-TP_Search'
+when tp_flag=0 and lower(pagename) like '%bill%' or lower(pagename) like '%charge%' or lower(pagename) like '%autopay%'  or lower(pagename) like '%nextbillsummary%' then 'Bill_General_Search'
+when tp_flag=0 and tp_search_term_flag=0 and search_ind=1 then 'Page_General-General_Search'
+when tp_flag =0 and  lower(pagename) like  '%trip planner%' then 'TripPlanner_general'
+else 'no_subevent' end as subevent1,
+case when tp_flag = 1 then
+case
+when (lower(pagename) like '%cruise%' or lower(pagename) like '%bahamas%' or lower(pagename) like '%honduras%' or lower(pagename) like '%alaska%') then 'Cruise'
+when  lower(pagename) like '%activat%' or lower(pagename) like '%add%'  then 'Activate_TP'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%prepaid%' then 'Faq_Prepaid'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%outside the us%' then 'Faq_OutsideUS'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%unlimited%' then 'Unlimited_Plan'
+when  lower(pagename) like  '%trip planner%' then 'TripPlanner'
+when  lower(pagename) like '%support%' then 'Faq_Support'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and (lower(pagename) not like '%about the plan%') and (lower(pagename) not like '%prepaid%') and (lower(pagename) not like '%outside the us%') and (lower(pagename) not like '%unlimited%') and (lower(pagename) not like '%trip planner%') and (lower(pagename) not like '%support%') then 'Faq_General'
+when lower(pagename) like '%travel-pass-video%' then 'TP_Video'
+when lower(pagename) like '%bill%' or lower(pagename) like '%charge%' or lower(pagename) like '%autopay%'  or lower(pagename) like '%nextbillsummary%' then 'Billing'
+when lower(pagename) like '%call%' or lower(pagename) like '%calling%' or lower(pagename) like '%data%' or lower(pagename) like '%roam%' or lower(pagename) like '%hotspot%' or lower(pagename) like '%wifi%' or lower(pagename) like '%travel-pass-usage%'then 'Usage'
+when lower(pagename) like '%go-unlimited%' or lower(pagename) like '%unlimited-plan%'  then 'UnlimitedPlan'
+when lower(pagename) like '%multiple-devices%' or lower(pagename) like '%samsung%' or  lower(pagename) like '%iphone%' then 'Devices'
+when lower(pagename) like '%devicetroubleshootingassistant%' then 'settings'
+when lower(pagename) like '%travelpass countries%' or lower(pagename) like '%canada%' or lower(pagename) like '%mexico%' then 'Count_CAN_MEX'
+when lower(pagename) like '%international%' AND (lower(pagename) like '%faq%' or lower(pagename) like '%question%') then 'Faq_International'
+else 'TP_Enquiry' end
+else 'not_tp' end as tp_categories,
+case when lower(a.geo_country)!='usa' then 'OutsideUS' else 'InsideUS' end as visit_country,
+geo_country,
+case when timespent_pg <=60 then 'lt_1min'
+when  timespent_pg >60 and timespent_pg <=240 then 'bw_1_4min'
+when  timespent_pg >240 and timespent_pg <=600 then 'bw_4_10min'
+when  timespent_pg >600 and timespent_pg <=1800 then 'bw_10_30min'
+when  timespent_pg >1800 then 'gt_30min'
+end as page_timespent FROM (select * ,
+case when ((lower(internal_srch_terms) like '%travel%' and lower(internal_srch_terms) like '%pass%') or (lower(internal_srch_terms) like '%travel%' and lower(internal_srch_terms) like '%plan%') or (lower(internal_srch_terms) like '%international%')) then 1 else 0 end as tp_search_term_flag,
+case when ((lower(pagename) like '%travel%' and lower(pagename) like '%pass%') or (lower(pagename) like '%travel%' and lower(pagename) like '%plan%') or (lower(pagename) like '%international%')) then 1 else 0 end as tp_flag,
+case when internal_srch_terms!='' and internal_srch_terms is not null then 1 else 0 end as search_ind
+from VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_SCAT_SUMMARY
+where (cust_id is not null)and PROCESS_DT >=date_sub(current_date(),7))a) as a
+inner join
+VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST B
+on
+a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and trim(A.cust_id) is not null
+and trim(a.mtn) is not null)z
+where lower(tp_categories) not in ('devices','not_tp')
+
+Comments: This table filters all the people who have visited mvo (website) international related pages into categories defined by us. We may want to redefine the categories to receive a more balanced set
+
+
+
+-------------------------------------------------------------------------MFAPP--------------------------------------------------------------------------
+
+create table VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_MFAPP_DESC_BASE as
+select * from
+
+(select
+b.cust_id,b.mtn,b.cust_line_seq_id,b.acct_num,
+a.session_start_date,
+a.session_timestamp,
+a.tp_flag,
+a.subevent1,
+a.tp_categories,
+a.visit_country,
+a.process_dt
+from
+(SELECT DISTINCT 
+a.cust_id,
+a.mtn,
+a.acct_num, 
+a.cust_line_seq_id, 
+substr(date_time,1,10) as session_start_date,
+date_time as session_timestamp,
+a.process_dt,
+tp_flag, 
+timespent_pg_sec, 
+case when tp_flag=1 then 
+case when tp_chat_flag=1 then 'TP_Page-Chat_TP' 
+when tp_chat_flag=0 and chat_ind=1 then 'TP_Page-Chat_General' 
+else 'TP_Page' end 
+when tp_flag=0 and (lower(flow_name_navigation) like '%cruise%' or lower(flow_name_navigation) like '%bahamas%' or lower(flow_name_navigation) like '%honduras%' or lower(flow_name_navigation) like '%alaska%')  then 'Page_General-Cruise' 
+when tp_flag =0 and lower(flow_name_navigation) like '%bill%' or lower(flow_name_navigation) like '%charge%' or lower(flow_name_navigation) like '%autopay%' then 'Bill_general_search'
+when tp_flag=0 and tp_chat_flag=1 then 'Page_General-Chat_TP' 
+when tp_flag=0 and tp_chat_flag=0 and chat_ind=1 then 'Page_General-Chat_General' 
+else 'No_Subevent' end as subevent1, 
+case when tp_flag = 1 then 
+case 
+when (lower(flow_name_navigation) like '%cruise%' or lower(flow_name_navigation) like '%bahamas%' or lower(flow_name_navigation) like '%honduras%' or lower(flow_name_navigation) like '%alaska%') then 'Cruise' 
+when lower(flow_name_navigation) like '%device%' then 'Devices' 
+when (lower(flow_name_navigation) like '%country%' or lower(flow_name_navigation) like '%countries%') then 'Countries' 
+when lower(flow_name_navigation) like '%disable%' then 'Disable_TP' 
+when lower(flow_name_navigation) like '%support%' then 'Support' 
+when lower(flow_name_navigation) like '%usage%' then 'Usage' 
+when (lower(flow_name_navigation) like '%addplan%' or lower(flow_name_navigation) like '%enable%') then 'Activate' 
+when lower(flow_name_navigation) like '%bill%' or lower(flow_name_navigation) like '%charge%' or lower(flow_name_navigation) like '%autopay%' then 'Billing'
+when lower(flow_name_navigation) like '%travelpass countries%' or lower(flow_name_navigation) like '%canada%' or lower(flow_name_navigation) like '%mexico%' then 'CAN_MEX'
+--when lower(flow_name_navigation) like '%international%' and lower(flow_name_navigation) like '%trip%' and lower(flow_name_navigation) like '%planner%' then 'Trip_Planner'
+else 'TP_Enquiry' end 
+else 'not_tp' end as tp_categories, 
+geo_country,
+case when lower(a.geo_country)!='usa' then 'OutsideUS' else 'InsideUS' end as visit_country 
+FROM (select * ,
+case when ((lower(flow_name_navigation) like '%travel%' and lower(flow_name_navigation) like '%pass%') or (lower(flow_name_navigation) like '%travel%' and lower(flow_name_navigation) like '%plan%') or (lower(flow_name_navigation) like '%international%')) and lower(flow_name_navigation) not like '%mf/shop%' and lower(flow_name_navigation) not like '%mf/in store%' and lower(flow_name_navigation) not like '%mf/loyalty%' then 1 else 0 end as tp_flag, 
+case when ((lower(cust_communication) like '%travel%' and lower(cust_communication) like '%pass%') or (lower(cust_communication) like '%travel%' and lower(cust_communication) like '%plan%') or (lower(cust_communication) like '%international%')) and lower(flow_name_navigation) not like '%mf/in store%' and lower(flow_name_navigation) not like '%mf/loyalty%' then 1 else 0 end as tp_chat_flag, 
+case when cust_communication!='' then 1 else 0 end as chat_ind 
+from VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_MF_APP_SUMMARY 
+where user_type='Valid User' and PROCESS_DT >=date_sub(current_date(),7))a) as a
+inner join 
+VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST B
+where 
+a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and trim(A.cust_id) is not null 
+and trim(a.mtn) is not null)z
+where lower(tp_categories) not in ('not_tp')
+
+Comments: This table filters all the people who have visited mva (APP) international related pages into categories defined by us. We may want to redefine the categories to receive a more balanced set
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+DROP  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE
+AS
+select  distinct  A.cust_id,A.acct_num,A.CUST_LINE_SEQ_ID,A.MTN
+FROM (
+select  distinct  cust_id,acct_num,CUST_LINE_SEQ_ID,MTN FROM  VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_SCAT_DESC_BASE 
+UNION 
+select  distinct  cust_id,acct_num,CUST_LINE_SEQ_ID,MTN FROM  VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_TRAVEL_BASE
+UNION 
+select  distinct  cust_id,acct_num,CUST_LINE_SEQ_ID,MTN FROM  VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_MFAPP_DESC_BASE)AS A,
+VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST as B
+where a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and a.acct_num=b.acct_num
+and a.cust_line_seq_id=b.cust_line_seq_id
+
+Comments: The daily scoring base table which has the list of customers who are going to be scored based on whether they travelled before at least once in past 7 days 
+or visited intl related mf app or site cat in the past 7 days. In next version we should add the people who called related to international before also as a part of 
+this scoring table.
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_INTL_CALL_BASE
+
+create table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_INTL_CALL_BASE
+as 
+select
+a.CUST_ID
+,a.acct_num
+,a.cust_line_seq_id
+,a.mtn
+,a.ivr_call_id
+,a.call_start_dt
+,a.call_start_tm
+,a.call_start_tm_stmp
+from 
+(select a.* from (
+select a.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.ivr_call_id,a.call_start_dt ORDER BY a.call_start_tm,a.call_end_tm DESC) AS call_seq
+from 
+(SELECT
+DISTINCT CUST_ID
+,acct_num
+,cust_line_seq_id
+,mtn
+,ivr_call_id
+,call_start_dt
+,call_start_tm
+,call_end_tm
+,CONCAT(call_start_dt,' ',SUBSTR(call_start_tm,12,8)) AS call_start_tm_stmp
+FROM  VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_CUST_CALL_SUMMARY
+where 
+CTGRY_DRIVER LIKE '%INTL%')a) as a
+where a.call_seq =1)a
+inner join 
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE as b
+on a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and a.acct_num=b.acct_num
+and a.cust_line_seq_id=b.cust_line_seq_id
+
+Comments: Intersection of INTL call table with the scoring base table. In case of escalation calls for the same ivr id there will be
+2 records. To take care of that duplication all such calls have been grouped together and those have been sequenced 1 and 2 as call_seq, from which only first
+one is being taken in the table.

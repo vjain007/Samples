@@ -1,0 +1,196 @@
+--------------------------------------------------------------query1-------------------------------------
+
+
+# In this table we have explored the urls for MFAPP visits and marked each url as relevant categories related to international and the others   which are not international as 'not_tp'
+  case when ((lower(flow_name_navigation) like '%travel%' and lower(flow_name_navigation) like '%pass%') or (lower(flow_name_navigation) like '%travel%' and lower(flow_name_navigation) like '%plan%') or (lower(flow_name_navigation) like '%international%')) and lower(flow_name_navigation) not like '%mf/shop%' and lower(flow_name_navigation) not like '%mf/in store%' and lower(flow_name_navigation) not like '%mf/loyalty%' then 1 else 0 end as tp_flag. Post that we are further capturing the other pages like bill, support, device,usage etc.
+
+#The condition case when cust_communication!='' then 1 else 0 end as chat_ind ensures if a person had a online chat communication.
+
+
+
+
+drop table vzw_soi_prd_tbls.ITP_SAD_CUST_mfapp_BASE;
+create table vzw_soi_prd_tbls.ITP_SAD_CUST_mfapp_BASE as
+select b.*,
+T.session_start_date,
+T.session_timestamp,
+T.tp_flag,
+T.subevent1,
+T.tp_categories,
+T.visit_country
+from
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_CALL_BASE as b
+inner join
+(SELECT DISTINCT 
+			a.cust_id,
+			a.mtn,
+			a.acct_num, 
+			a.cust_line_seq_id, 
+			substr(date_time,1,10) as session_start_date,
+			date_time as session_timestamp,
+			tp_flag, 
+            timespent_pg_sec, 
+			case when tp_flag=1 then 
+				case when tp_chat_flag=1 then 'TP_Page-Chat_TP' 
+				when tp_chat_flag=0 and chat_ind=1 then 'TP_Page-Chat_General' 
+				else 'TP_Page' end 
+			when tp_flag=0 and (lower(flow_name_navigation) like '%cruise%' or lower(flow_name_navigation) like '%bahamas%' or lower(flow_name_navigation) like '%honduras%' or lower(flow_name_navigation) like '%alaska%')  then 'Page_General-Cruise' 
+			when tp_flag =0 and lower(flow_name_navigation) like '%bill%' or lower(flow_name_navigation) like '%charge%' or lower(flow_name_navigation) like '%autopay%' then 'Bill_general_search'
+			when tp_flag=0 and tp_chat_flag=1 then 'Page_General-Chat_TP' 
+			when tp_flag=0 and tp_chat_flag=0 and chat_ind=1 then 'Page_General-Chat_General' 
+			else 'No_Subevent' end as subevent1, 
+			case when tp_flag = 1 then 
+				case 
+				when (lower(flow_name_navigation) like '%cruise%' or lower(flow_name_navigation) like '%bahamas%' or lower(flow_name_navigation) like '%honduras%' or lower(flow_name_navigation) like '%alaska%') then 'Cruise' 
+				when lower(flow_name_navigation) like '%device%' then 'Devices' 
+				when (lower(flow_name_navigation) like '%country%' or lower(flow_name_navigation) like '%countries%') then 'Countries' 
+				when lower(flow_name_navigation) like '%disable%' then 'Disable_TP' 
+				when lower(flow_name_navigation) like '%support%' then 'Support' 
+				when lower(flow_name_navigation) like '%usage%' then 'Usage' 
+				when (lower(flow_name_navigation) like '%addplan%' or lower(flow_name_navigation) like '%enable%') then 'Activate' 
+				when lower(flow_name_navigation) like '%bill%' or lower(flow_name_navigation) like '%charge%' or lower(flow_name_navigation) like '%autopay%' then 'Billing'
+				when lower(flow_name_navigation) like '%travelpass countries%' or lower(flow_name_navigation) like '%canada%' or lower(flow_name_navigation) like '%mexico%' then 'CAN_MEX'
+				--when lower(flow_name_navigation) like '%international%' and lower(flow_name_navigation) like '%trip%' and lower(flow_name_navigation) like '%planner%' then 'Trip_Planner'
+			    else 'TP_Enquiry' end 
+			    else 'not_tp' end as tp_categories, 
+			    geo_country,
+			case when lower(a.geo_country)!='usa' then 'OutsideUS' else 'InsideUS' end as visit_country 
+			FROM (select * ,
+					case when ((lower(flow_name_navigation) like '%travel%' and lower(flow_name_navigation) like '%pass%') or (lower(flow_name_navigation) like '%travel%' and lower(flow_name_navigation) like '%plan%') or (lower(flow_name_navigation) like '%international%')) and lower(flow_name_navigation) not like '%mf/shop%' and lower(flow_name_navigation) not like '%mf/in store%' and lower(flow_name_navigation) not like '%mf/loyalty%' then 1 else 0 end as tp_flag, 
+					case when ((lower(cust_communication) like '%travel%' and lower(cust_communication) like '%pass%') or (lower(cust_communication) like '%travel%' and lower(cust_communication) like '%plan%') or (lower(cust_communication) like '%international%')) and lower(flow_name_navigation) not like '%mf/in store%' and lower(flow_name_navigation) not like '%mf/loyalty%' then 1 else 0 end as tp_chat_flag, 
+					case when cust_communication!='' then 1 else 0 end as chat_ind 
+			from VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_MF_APP_SUMMARY 
+			where user_type='Valid User')a)T
+			where T.cust_id=b.cust_id
+            and T.mtn=b.mtn
+
+--note : in this table, the date_time (pg_visit_time)  has been renamed as session_timestamp 
+
+#----------------------------------------------------------query-1---------------------------------------------------#
+
+#This table filters out the visits which are not relevant to international (where lower(tp_categories) not in ('not_tp')) and removes the similar page visits in a short period of time (ROW_NUMBER() OVER (PARTITION BY CUST_ID,mtn,ivr_call_id,tp_categories order by session_timestamp) AS last_ses_vst). 
+
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_CALL_TVL_INDICATORS_INTER ;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_CALL_TVL_INDICATORS_INTER as 
+select a.*
+from
+(select
+a.cust_id,
+a.mtn,
+a.ivr_call_id,
+a.call_start_tm_stmp,
+a.session_start_date,
+a.session_timestamp,
+a.tp_categories as category_new,
+a.subevent1
+from 
+(select *,
+ROW_NUMBER() OVER (PARTITION BY CUST_ID,mtn,ivr_call_id,tp_categories order by session_timestamp) AS last_ses_vst
+from 
+(select * from 
+vzw_soi_prd_tbls.ITP_SAD_CUST_mfapp_BASE 
+where lower(tp_categories) not in ('not_tp'))T)a
+where last_ses_vst=1)a
+inner join
+VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_SEQ as b
+where a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and a.session_timestamp between date_sub(b.call_start_tm_stmp,7) and b.call_start_tm_stmp
+and a.ivr_call_id = b.ivr_call_id
+
+#----------------------------------------------------query-2-----------------------------------------------------------------------------------------------#
+In this table we are transposing the indicators so that we have all the sessions visited by a customer in one row before 7 days of the call.
+ 
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_CALL_TVL_INDICATORS_INTER_v1;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_CALL_TVL_INDICATORS_INTER_v1
+as 
+select x.cust_id,x.mtn,x.call_start_tm_stmp,x.ivr_call_id,
+    COLLECT_SET(activate_tp)[0] as MVA_activate_tp_ind,
+    COLLECT_SET(intl_Billing)[0] as MVA_intl_billing_ind,
+    COLLECT_SET(cruise)[0] as MVA_cruise_ind,
+    COLLECT_SET(usage)[0] as MVA_usage_ind,
+    COLLECT_SET(faq_support)[0] as MVA_device_support_ind,
+    COLLECT_SET( tp_page_chat_tp_search)[0] as MVA_tp_page_chat_tp_ind,
+    COLLECT_SET(can_mex)[0] as MVA_can_mex_ind,
+    COLLECT_SET(tp_enquiry)[0] as MVA_tp_enquiry_ind,
+    COLLECT_SET(country_researched)[0] as MVA_countries_ind,
+    COLLECT_SET(disable_tp)[0] as MVA_disable_tp_ind,
+    COLLECT_SET(devices)[0] as MVA_devices_ind
+    
+from
+(select cust_id,
+    mtn,
+    call_start_tm_stmp,
+    ivr_call_id,
+    case when lower(category_new) ='activate' then session_timestamp end as  activate_tp,
+    case when lower(category_new) = 'billing' then session_timestamp end as  intl_Billing,
+    case when lower(category_new) = 'cruise' then session_timestamp end as  cruise,
+    case when lower(category_new) = 'usage' then session_timestamp end as  usage,
+    case when lower(category_new) = 'support' then session_timestamp end as  faq_support,
+    case when lower(category_new) = 'tp_page-chat_tp' then session_timestamp end as  tp_page_chat_tp_search,
+    case when lower(category_new) = 'can_mex' then session_timestamp end as can_mex,
+    case when lower(category_new) = 'tp_enquiry' then session_timestamp end as tp_enquiry,
+    case when lower(category_new) = 'countries' then session_timestamp end as country_researched,
+    case when lower(category_new) = 'disable_tp' then session_timestamp end as disable_tp,
+    case when lower(category_new) = 'devices' then session_timestamp end as devices
+from VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_CALL_TVL_INDICATORS_INTER a where a.session_timestamp < a.call_start_tm_stmp )x
+group by   cust_id,mtn,call_start_tm_stmp,ivr_call_id
+
+#-------------------------------------------------query-3-----------------------------------------------------#
+In this table we have calculated the last session time by taking the maximum date time of all the sessions that took place 7 days before the call.
+Later we are also creating the final indicator colums using case statements.
+
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_CALL_TVL_INDICATORS
+create table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_CALL_TVL_INDICATORS as 
+select 
+cust_id,
+mtn,
+call_start_tm_stmp,
+ivr_call_id,
+case when mva_activate_tp_ind is not null then 1 else 0 end as mva_activate_tp_ind,
+case when mva_intl_billing_ind is not null then 1 else 0 end as mva_intl_billing_ind,
+case when mva_cruise_ind is not null then 1 else 0 end as mva_cruise_ind,
+case when mva_usage_ind is not null then 1 else 0 end as mva_usage_ind,
+case when mva_device_support_ind is not null then 1 else 0 end as mva_device_support_ind,
+case when mva_tp_page_chat_tp_ind is not null then 1 else 0 end as mva_tp_page_chat_tp_ind,
+case when mva_can_mex_ind is not null then 1 else 0 end as mva_can_mex_ind,
+case when mva_tp_enquiry_ind is not null then 1 else 0 end as mva_tp_enquiry_ind,
+case when mva_countries_ind is not null then 1 else 0 end as mva_countries_ind,
+case when mva_disable_tp_ind is not null then 1 else 0 end as mva_disable_tp_ind,
+case when mva_devices_ind is not null then 1 else 0 end as mva_devices_ind,
+Last_session_time as mva_last_pg_vst_time,
+lst_session_mfapp_activate_tp_ind,
+lst_session_mfapp_billing_ind,
+lst_session_mfapp_cruise_ind,
+lst_session_mfapp_usage_ind,
+lst_session_mfapp_support_ind,
+lst_session_mfapp_tp_page_chat_tp_ind,
+lst_session_mfapp_can_mex_ind,
+lst_session_mfapp_tp_enquiry_ind,
+lst_session_mfapp_countries_ind,
+lst_session_mfapp_disable_tp_ind,
+lst_session_mfapp_devices_ind
+from 
+(select *,
+case when mva_activate_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_activate_tp_ind,
+case when mva_intl_billing_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_billing_ind,
+case when mva_cruise_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_cruise_ind,
+case when mva_usage_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_usage_ind,
+case when mva_device_support_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_support_ind ,
+case when mva_tp_page_chat_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_tp_page_chat_tp_ind,
+case when mva_can_mex_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_can_mex_ind,
+case when mva_tp_enquiry_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_tp_enquiry_ind,
+case when mva_countries_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_countries_ind,
+case when mva_disable_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_disable_tp_ind,
+case when mva_devices_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_devices_ind
+
+from 
+(select *,
+greatest(coalesce(mva_activate_tp_ind,0),coalesce(mva_intl_billing_ind,0),coalesce(mva_cruise_ind,0),
+coalesce(mva_usage_ind,0),coalesce(mva_device_support_ind,0),coalesce(mva_tp_page_chat_tp_ind,0),coalesce(mva_can_mex_ind,0),coalesce(mva_tp_enquiry_ind,0),
+coalesce(mva_countries_ind,0),coalesce(mva_disable_tp_ind,0),coalesce(mva_devices_ind,0)) as Last_session_time
+from VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_CALL_TVL_INDICATORS_INTER_v1)z)v
+

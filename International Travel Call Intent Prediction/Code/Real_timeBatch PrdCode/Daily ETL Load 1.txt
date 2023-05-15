@@ -1,0 +1,1835 @@
+import datetime
+import pyspark
+import sys
+from datetime import timedelta
+
+from pyspark.sql import SparkSession
+from pyspark.sql import Row
+from pyspark.sql.types import *
+from pyspark.sql.functions import *
+from pyspark.sql.functions import udf
+
+if __name__ == "__main__":
+    # $example on:init_session$
+    # $example off:init_session$
+
+    spark = pyspark.sql.SparkSession.builder.config("hive.exec.dynamic.partition", "true").config("hive.exec.dynamic.partition.mode", "nonstrict").enableHiveSupport().getOrCreate()
+    spark.conf.set("spark.sql.execution.arrow.enabled", "true")
+    ref_date=datetime.date.today()
+    from_date = ref_date.replace(day=1).strftime("%Y-%m-%d %H:%M:%S")
+
+   #Scoring_rtm_tbl = sys.argv[1]
+    print('Scoring_rtm_tbl')
+    print('Program started')
+    spark.sql("use vzw_soi_prd_tbls")
+
+    #Script_1
+
+
+    ITP_TOTAL_DLY_CUST=spark.sql('SELECT DISTINCT A.CUST_ID,A.ACCT_NUM,A.CUST_LINE_SEQ_ID,A.MTN FROM VZW_UDA_PRD_ALLVM.SUBS_SUM_FACT_V  AS A WHERE A.Rpt_mth = TO_DATE(\'' + from_date + '\') AND A.ending_customers = 1 AND A.vsn_cust_type_cd = \'PE\' AND A.rev_gen_ind = \'Y\'')
+
+    ITP_TOTAL_DLY_CUST.createOrReplaceTempView('ITP_TOTAL_DLY_CUST')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST_SPARK_RT SELECT * FROM ITP_TOTAL_DLY_CUST')
+
+
+    ITP_SAD_CUST_DLY_TRAVEL_BASE=spark.sql("""
+SELECT Z.* FROM
+(SELECT DISTINCT A.CUST_ID,A.ACCT_NUM,B.CUST_LINE_SEQ_ID,A.MTN,
+A.COUNTRY_CD,
+A.SMS_REQ_DT,
+A.SMS_REQ_TS,
+A.TVL_TS
+FROM (
+SELECT
+CUST_ID,
+ACCT_NUM,
+MTN,
+COUNTRY_CD,
+REQUEST_DT AS SMS_REQ_DT,
+REQUEST_TS AS SMS_REQ_TS,
+CAST(CONCAT(REQUEST_DT,' ',SUBSTR(REQUEST_TS,12,8)) AS STRING) AS TVL_TS
+FROM VZW_SOI_PRD_TBLS.vzsoi_semantic_travel_summary) AS A
+inner join
+VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST_SPARK_RT AS B
+on TRIM(A.CUST_ID)=TRIM(B.CUST_ID)
+AND TRIM(A.ACCT_NUM)=TRIM(B.ACCT_NUM)
+AND TRIM(A.MTN)=TRIM(B.MTN))z
+WHERE Z.TVL_TS >= date_sub(current_timestamp(),7)
+AND Z.TVL_TS <= current_timestamp()
+""")
+    ITP_SAD_CUST_DLY_TRAVEL_BASE.createOrReplaceTempView('ITP_SAD_CUST_DLY_TRAVEL_BASE')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_TRAVEL_BASE_SPARK_RT SELECT * FROM ITP_SAD_CUST_DLY_TRAVEL_BASE')
+
+    ITP_SAD_CUST_DLY_SCAT_DESC_BASE=spark.sql("""
+
+select* from
+(
+select
+b.cust_id,b.mtn,b.cust_line_seq_id,b.acct_num,
+a.session_start_date,
+a.pg_vst_timestamp,
+a.session_start_tm,
+a.tp_flag,
+a.subevent1,
+a.tp_categories,
+a.visit_country,
+a.page_timespent,
+a.process_dt
+from
+(SELECT DISTINCT
+a.cust_id,
+a.mtn,
+--a.cust_line_seq_id,
+substr(a.date_time,1,10) as session_start_date,
+a.date_time as pg_vst_timestamp,
+a.session_start_tm,
+a.process_dt,
+tp_flag,
+timespent_pg,
+case when tp_flag=1 then
+case when a.chat_id!='' and tp_search_term_flag=1 then 'TP_Page-Chat_TP-Search'
+when tp_search_term_flag=1 then 'TP_Page-Search_TP'
+else 'TP_Page' end
+when tp_flag=0 and (lower(pagename) like '%cruise%' or lower(pagename) like '%bahamas%' or lower(pagename) like '%honduras%' or lower(pagename) like '%alaska%')  then 'Cruise_general_search'
+when tp_flag=0 and tp_search_term_flag=1 then 'Page_General-TP_Search'
+when tp_flag=0 and lower(pagename) like '%bill%' or lower(pagename) like '%charge%' or lower(pagename) like '%autopay%'  or lower(pagename) like '%nextbillsummary%' then 'Bill_General_Search'
+when tp_flag=0 and tp_search_term_flag=0 and search_ind=1 then 'Page_General-General_Search'
+when tp_flag =0 and  lower(pagename) like  '%trip planner%' then 'TripPlanner_general'
+else 'no_subevent' end as subevent1,
+case when tp_flag = 1 then
+case
+when (lower(pagename) like '%cruise%' or lower(pagename) like '%bahamas%' or lower(pagename) like '%honduras%' or lower(pagename) like '%alaska%') then 'Cruise'
+when  lower(pagename) like '%activat%' or lower(pagename) like '%add%'  then 'Activate_TP'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%prepaid%' then 'Faq_Prepaid'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%outside the us%' then 'Faq_OutsideUS'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%unlimited%' then 'Unlimited_Plan'
+when  lower(pagename) like  '%trip planner%' then 'TripPlanner'
+when  lower(pagename) like '%support%' then 'Faq_Support'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and (lower(pagename) not like '%about the plan%') and (lower(pagename) not like '%prepaid%') and (lower(pagename) not like '%outside the us%') and (lower(pagename) not like '%unlimited%') and (lower(pagename) not like '%trip planner%') and (lower(pagename) not like '%support%') then 'Faq_General'
+when lower(pagename) like '%travel-pass-video%' then 'TP_Video'
+when lower(pagename) like '%bill%' or lower(pagename) like '%charge%' or lower(pagename) like '%autopay%'  or lower(pagename) like '%nextbillsummary%' then 'Billing'
+when lower(pagename) like '%call%' or lower(pagename) like '%calling%' or lower(pagename) like '%data%' or lower(pagename) like '%roam%' or lower(pagename) like '%hotspot%' or lower(pagename) like '%wifi%' or lower(pagename) like '%travel-pass-usage%'then 'Usage'
+when lower(pagename) like '%go-unlimited%' or lower(pagename) like '%unlimited-plan%'  then 'UnlimitedPlan'
+when lower(pagename) like '%multiple-devices%' or lower(pagename) like '%samsung%' or  lower(pagename) like '%iphone%' then 'Devices'
+when lower(pagename) like '%devicetroubleshootingassistant%' then 'settings'
+when lower(pagename) like '%travelpass countries%' or lower(pagename) like '%canada%' or lower(pagename) like '%mexico%' then 'Count_CAN_MEX'
+when lower(pagename) like '%international%' AND (lower(pagename) like '%faq%' or lower(pagename) like '%question%') then 'Faq_International'
+else 'TP_Enquiry' end
+else 'not_tp' end as tp_categories,
+case when lower(a.geo_country)!='usa' then 'OutsideUS' else 'InsideUS' end as visit_country,
+geo_country,
+case when timespent_pg <=60 then 'lt_1min'
+when  timespent_pg >60 and timespent_pg <=240 then 'bw_1_4min'
+when  timespent_pg >240 and timespent_pg <=600 then 'bw_4_10min'
+when  timespent_pg >600 and timespent_pg <=1800 then 'bw_10_30min'
+when  timespent_pg >1800 then 'gt_30min'
+end as page_timespent FROM (select * ,
+case when ((lower(internal_srch_terms) like '%travel%' and lower(internal_srch_terms) like '%pass%') or (lower(internal_srch_terms) like '%travel%' and lower(internal_srch_terms) like '%plan%') or (lower(internal_srch_terms) like '%international%')) then 1 else 0 end as tp_search_term_flag,
+case when ((lower(pagename) like '%travel%' and lower(pagename) like '%pass%') or (lower(pagename) like '%travel%' and lower(pagename) like '%plan%') or (lower(pagename) like '%international%')) then 1 else 0 end as tp_flag,
+case when internal_srch_terms!='' and internal_srch_terms is not null then 1 else 0 end as search_ind
+from VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_SCAT_SUMMARY
+where (cust_id is not null)and PROCESS_DT >=date_sub(current_date(),7))a) as a
+inner join
+VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST_SPARK_RT B
+on
+a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and trim(A.cust_id) is not null
+and trim(a.mtn) is not null)z
+where lower(tp_categories) not in ('devices','not_tp')""")
+
+    ITP_SAD_CUST_DLY_SCAT_DESC_BASE.createOrReplaceTempView('ITP_SAD_CUST_DLY_SCAT_DESC_BASE')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_SCAT_DESC_BASE_SPARK_RT SELECT * FROM ITP_SAD_CUST_DLY_SCAT_DESC_BASE')
+
+    ITP_SAD_CUST_DLY_MFAPP_DESC_BASE=spark.sql("""
+select* from
+(select
+b.cust_id,b.mtn,b.cust_line_seq_id,b.acct_num,
+a.session_start_date,
+a.session_timestamp,
+a.tp_flag,
+a.subevent1,
+a.tp_categories,
+a.visit_country,
+a.process_dt
+from
+(SELECT DISTINCT
+a.cust_id,
+a.mtn,
+a.acct_num,
+a.cust_line_seq_id,
+substr(date_time,1,10) as session_start_date,
+date_time as session_timestamp,
+a.process_dt,
+tp_flag,
+timespent_pg_sec,
+case when tp_flag=1 then
+case when tp_chat_flag=1 then 'TP_Page-Chat_TP'
+when tp_chat_flag=0 and chat_ind=1 then 'TP_Page-Chat_General'
+else 'TP_Page' end
+when tp_flag=0 and (lower(flow_name_navigation) like '%cruise%' or lower(flow_name_navigation) like '%bahamas%' or lower(flow_name_navigation) like '%honduras%' or lower(flow_name_navigation) like '%alaska%')  then 'Page_General-Cruise'
+when tp_flag =0 and lower(flow_name_navigation) like '%bill%' or lower(flow_name_navigation) like '%charge%' or lower(flow_name_navigation) like '%autopay%' then 'Bill_general_search'
+when tp_flag=0 and tp_chat_flag=1 then 'Page_General-Chat_TP'
+when tp_flag=0 and tp_chat_flag=0 and chat_ind=1 then 'Page_General-Chat_General'
+else 'No_Subevent' end as subevent1,
+case when tp_flag = 1 then
+case
+when (lower(flow_name_navigation) like '%cruise%' or lower(flow_name_navigation) like '%bahamas%' or lower(flow_name_navigation) like '%honduras%' or lower(flow_name_navigation) like '%alaska%') then 'Cruise'
+when lower(flow_name_navigation) like '%device%' then 'Devices'
+when (lower(flow_name_navigation) like '%country%' or lower(flow_name_navigation) like '%countries%') then 'Countries'
+when lower(flow_name_navigation) like '%disable%' then 'Disable_TP'
+when lower(flow_name_navigation) like '%support%' then 'Support'
+when lower(flow_name_navigation) like '%usage%' then 'Usage'
+when (lower(flow_name_navigation) like '%addplan%' or lower(flow_name_navigation) like '%enable%') then 'Activate'
+when lower(flow_name_navigation) like '%bill%' or lower(flow_name_navigation) like '%charge%' or lower(flow_name_navigation) like '%autopay%' then 'Billing'
+when lower(flow_name_navigation) like '%travelpass countries%' or lower(flow_name_navigation) like '%canada%' or lower(flow_name_navigation) like '%mexico%' then 'CAN_MEX'
+--when lower(flow_name_navigation) like '%international%' and lower(flow_name_navigation) like '%trip%' and lower(flow_name_navigation) like '%planner%' then 'Trip_Planner'
+else 'TP_Enquiry' end
+else 'not_tp' end as tp_categories,
+geo_country,
+case when lower(a.geo_country)!='usa' then 'OutsideUS' else 'InsideUS' end as visit_country
+FROM (select * ,
+case when ((lower(flow_name_navigation) like '%travel%' and lower(flow_name_navigation) like '%pass%') or (lower(flow_name_navigation) like '%travel%' and lower(flow_name_navigation) like '%plan%') or (lower(flow_name_navigation) like '%international%')) and lower(flow_name_navigation) not like '%mf/shop%' and lower(flow_name_navigation) not like '%mf/in store%' and lower(flow_name_navigation) not like '%mf/loyalty%' then 1 else 0 end as tp_flag,
+case when ((lower(cust_communication) like '%travel%' and lower(cust_communication) like '%pass%') or (lower(cust_communication) like '%travel%' and lower(cust_communication) like '%plan%') or (lower(cust_communication) like '%international%')) and lower(flow_name_navigation) not like '%mf/in store%' and lower(flow_name_navigation) not like '%mf/loyalty%' then 1 else 0 end as tp_chat_flag,
+case when cust_communication!='' then 1 else 0 end as chat_ind
+from VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_MF_APP_SUMMARY
+where user_type='Valid User' and PROCESS_DT >=date_sub(current_date(),7))a) as a
+inner join
+VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST_SPARK_RT B
+where
+a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and trim(A.cust_id) is not null
+and trim(a.mtn) is not null)z
+where lower(tp_categories) not in ('not_tp')
+""")
+    ITP_SAD_CUST_DLY_MFAPP_DESC_BASE.createOrReplaceTempView('ITP_SAD_CUST_DLY_MFAPP_DESC_BASE')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_MFAPP_DESC_BASE_SPARK_RT SELECT * FROM ITP_SAD_CUST_DLY_MFAPP_DESC_BASE')
+
+
+    ITP_SAD_DLY_CUST_BASE=spark.sql("""
+select  distinct  A.cust_id,A.acct_num,A.CUST_LINE_SEQ_ID,A.MTN
+FROM (
+select  distinct  cust_id,acct_num,CUST_LINE_SEQ_ID,MTN FROM  VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_SCAT_DESC_BASE_SPARK_RT
+UNION
+select  distinct  cust_id,acct_num,CUST_LINE_SEQ_ID,MTN FROM  VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_TRAVEL_BASE_SPARK_RT
+UNION
+select  distinct  cust_id,acct_num,CUST_LINE_SEQ_ID,MTN FROM  VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_MFAPP_DESC_BASE_SPARK_RT)AS A,
+VZW_SOI_PRD_TBLS.ITP_TOTAL_DLY_CUST_SPARK_RT as B
+where a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and a.acct_num=b.acct_num
+and a.cust_line_seq_id=b.cust_line_seq_id""")
+
+    ITP_SAD_DLY_CUST_BASE.createOrReplaceTempView('ITP_SAD_DLY_CUST_BASE')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE_SPARK_RT SELECT * FROM ITP_SAD_DLY_CUST_BASE')
+
+
+    ITP_SAD_CUST_DLY_INTL_CALL_BASE=spark.sql("""
+select
+a.CUST_ID
+,a.acct_num
+,a.cust_line_seq_id
+,a.mtn
+,a.ivr_call_id
+,a.call_start_dt
+,a.call_start_tm
+,a.call_start_tm_stmp
+from
+(select a.* from (
+select a.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.ivr_call_id,a.call_start_dt ORDER BY a.call_start_tm,a.call_end_tm DESC) AS call_seq
+from
+(SELECT
+DISTINCT CUST_ID
+,acct_num
+,cust_line_seq_id
+,mtn
+,ivr_call_id
+,call_start_dt
+,call_start_tm
+,call_end_tm
+,CONCAT(call_start_dt,' ',SUBSTR(call_start_tm,12,8)) AS call_start_tm_stmp
+FROM  VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_CUST_CALL_SUMMARY
+where
+CTGRY_DRIVER LIKE '%INTL%')a) as a
+where a.call_seq =1)a
+inner join
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE_SPARK_RT as b
+on a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and a.acct_num=b.acct_num
+and a.cust_line_seq_id=b.cust_line_seq_id""")
+
+    ITP_SAD_CUST_DLY_INTL_CALL_BASE.createOrReplaceTempView('ITP_SAD_CUST_DLY_INTL_CALL_BASE')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_INTL_CALL_BASE_SPARK_RT SELECT * FROM ITP_SAD_CUST_DLY_INTL_CALL_BASE')
+
+    ITP_SAD_DLY_TVL_CALL_INT1=spark.sql("""
+select z.* from
+(select
+distinct
+a.cust_id,
+a.mtn,
+a.acct_num,
+a.cust_line_seq_id,
+b.COUNTRY_CD,
+b.SMS_REQ_DT,
+b.TVL_TS,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.cust_line_seq_id ORDER BY  TVL_TS DESC) AS tvl_SEQ
+from VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE_SPARK_RT as a
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_TRAVEL_BASE_SPARK_RT as b
+ON
+a.cust_id=b.cust_id
+and a.acct_num=b.acct_num
+and a.mtn=b.mtn
+WHERE b.TVL_TS <=date_sub(current_timestamp(),1))z
+where country_cd is not null""")
+
+    ITP_SAD_DLY_TVL_CALL_INT1.createOrReplaceTempView('ITP_SAD_DLY_TVL_CALL_INT1')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_DLY_TVL_CALL_INT1_SPARK_RT SELECT * FROM ITP_SAD_DLY_TVL_CALL_INT1')
+
+
+    ITP_SAD_DLY_CALL_TVL_SEQ= spark.sql("""
+SELECT
+CUST_ID,
+ACCT_NUM,
+MTN,
+cust_line_seq_id,
+MAX(tvl_SEQ)  AS PREV_TVL_COUNT,
+MAX(CASE WHEN TVL_SEQ = 1 THEN TVL_TS END) AS TVL1,
+MAX(CASE WHEN TVL_SEQ= 2 THEN TVL_TS END) AS TVL2,
+MAX(CASE WHEN TVL_SEQ = 3 THEN TVL_TS END) AS TVL3,
+MAX(CASE WHEN TVL_SEQ= 4 THEN TVL_TS END) AS TVL4,
+MAX(CASE WHEN  TVL_SEQ = 5 THEN TVL_TS END) AS TVL5,
+MAX(CASE WHEN  TVL_SEQ = 6 THEN TVL_TS END) AS TVL6,
+MAX(CASE WHEN  TVL_SEQ = 7 THEN TVL_TS END) AS TVL7,
+MAX(CASE WHEN  TVL_SEQ = 8 THEN TVL_TS END) AS TVL8,
+MAX(CASE WHEN  TVL_SEQ = 9 THEN TVL_TS END) AS TVL9,
+MAX(CASE WHEN  TVL_SEQ = 10 THEN TVL_TS END) AS TVL10,
+MAX(CASE WHEN TVL_SEQ = 1 THEN COUNTRY_CD  END) AS CCD1,
+MAX(CASE WHEN TVL_SEQ= 2 THEN  COUNTRY_CD END) AS CCD2,
+MAX(CASE WHEN TVL_SEQ = 3 THEN COUNTRY_CD  END) AS CCD3,
+MAX(CASE WHEN TVL_SEQ= 4 THEN COUNTRY_CD END) AS CCD4,
+MAX(CASE WHEN  TVL_SEQ = 5 THEN COUNTRY_CD END) AS CCD5,
+MAX(CASE WHEN  TVL_SEQ = 6 THEN COUNTRY_CD END) AS CCD6,
+MAX(CASE WHEN  TVL_SEQ = 7 THEN COUNTRY_CD END) AS CCD7,
+MAX(CASE WHEN  TVL_SEQ = 8 THEN COUNTRY_CD END) AS CCD8,
+MAX(CASE WHEN  TVL_SEQ = 9 THEN COUNTRY_CD END) AS CCD9,
+MAX(CASE WHEN  TVL_SEQ = 10 THEN COUNTRY_CD END) AS CCD10
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_TVL_CALL_INT1_SPARK_RT
+WHERE TRIM(CUST_ID) IS NOT NULL
+AND TRIM(MTN) IS NOT NULL
+GROUP BY CUST_ID,MTN,ACCT_NUM,cust_line_seq_id""")
+
+    ITP_SAD_DLY_CALL_TVL_SEQ.createOrReplaceTempView('ITP_SAD_DLY_CALL_TVL_SEQ')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALL_TVL_SEQ_SPARK_RT SELECT * FROM ITP_SAD_DLY_CALL_TVL_SEQ')
+
+    ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 =spark.sql("""
+select * from
+(select
+distinct
+a.cust_id,
+a.mtn,
+a.acct_num,
+a.CUST_LINE_SEQ_ID,
+a.ivr_call_id,
+a.call_start_tm_stmp,
+c.MTN_STATUS_IND,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.CUST_LINE_SEQ_ID ORDER BY  a.call_start_tm_stmp DESC) AS CALL_SEQ
+from VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_INTL_CALL_BASE_SPARK_RT as a
+inner join
+VZW_UDA_PRD_ALLVM.CUST_ACCT_LINE_V AS C
+on trim(C.CUST_ID)=trim(A.CUST_ID)
+AND trim(C.ACCT_NUM)=trim(A.ACCT_NUM)
+AND trim(C.CUST_LINE_SEQ_ID)=trim(A.CUST_LINE_SEQ_ID))z
+where trim(MTN_STATUS_IND) = 'A'
+and call_start_tm_stmp<=date_sub(current_date(),1)""")
+
+    ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1')
+
+    ITP_SAD_DLY_CALLS_SEQ=spark.sql("""
+SELECT
+CUST_ID,
+ACCT_NUM,
+MTN,
+CUST_LINE_SEQ_ID,
+MAX(call_start_tm_stmp) AS call_start_tm_stmp,
+COUNT(DISTINCT IVR_CALL_ID) AS PREV_CALL_COUNT,
+MAX(CASE WHEN CALL_SEQ = 1 THEN call_start_tm_stmp END) AS CALL_TS1,
+MAX(CASE WHEN CALL_SEQ= 2 THEN call_start_tm_stmp END) AS CALL_TS2,
+MAX(CASE WHEN CALL_SEQ = 3 THEN call_start_tm_stmp END) AS CALL_TS3,
+MAX(CASE WHEN CALL_SEQ= 4 THEN call_start_tm_stmp END) AS CALL_TS4,
+MAX(CASE WHEN  CALL_SEQ = 5 THEN call_start_tm_stmp END) AS CALL_TS5,
+MAX(CASE WHEN  CALL_SEQ = 6 THEN call_start_tm_stmp END) AS CALL_TS6,
+MAX(CASE WHEN  CALL_SEQ = 7 THEN call_start_tm_stmp END) AS CALL_TS7,
+MAX(CASE WHEN  CALL_SEQ = 8 THEN call_start_tm_stmp END) AS CALL_TS8,
+MAX(CASE WHEN  CALL_SEQ = 9 THEN call_start_tm_stmp END) AS CALL_TS9,
+MAX(CASE WHEN  CALL_SEQ = 10 THEN call_start_tm_stmp END) AS CALL_TS10,
+MAX(CASE WHEN CALL_SEQ = 1 THEN IVR_CALL_ID  END) AS IVR_CALL_ID1,
+MAX(CASE WHEN CALL_SEQ= 2 THEN  IVR_CALL_ID END) AS IVR_CALL_ID2,
+MAX(CASE WHEN CALL_SEQ = 3 THEN IVR_CALL_ID  END) AS IVR_CALL_ID3,
+MAX(CASE WHEN CALL_SEQ= 4 THEN IVR_CALL_ID END) AS IVR_CALL_ID4,
+MAX(CASE WHEN  CALL_SEQ = 5 THEN IVR_CALL_ID END) AS IVR_CALL_ID5,
+MAX(CASE WHEN  CALL_SEQ = 6 THEN IVR_CALL_ID END) AS IVR_CALL_ID6,
+MAX(CASE WHEN  CALL_SEQ = 7 THEN IVR_CALL_ID END) AS IVR_CALL_ID7,
+MAX(CASE WHEN  CALL_SEQ = 8 THEN IVR_CALL_ID END) AS IVR_CALL_ID8,
+MAX(CASE WHEN  CALL_SEQ = 9 THEN IVR_CALL_ID END) AS IVR_CALL_ID9,
+MAX(CASE WHEN  CALL_SEQ = 10 THEN IVR_CALL_ID END) AS IVR_CALL_ID10
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT
+GROUP BY CUST_ID,MTN,ACCT_NUM,CUST_LINE_SEQ_ID""")
+
+    ITP_SAD_DLY_CALLS_SEQ.createOrReplaceTempView('ITP_SAD_DLY_CALLS_SEQ')
+    spark.sql('INSERT OVERWRITE TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_SEQ_SPARK_RT SELECT * FROM ITP_SAD_DLY_CALLS_SEQ')
+
+
+    ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL= spark.sql("""
+SELECT DISTINCT
+A1.CUST_ID,
+A1.ACCT_NUM,
+A1.MTN,
+A1.CUST_LINE_SEQ_ID,
+CASE WHEN A.PREV_TVL_COUNT IS NULL THEN 0
+     ELSE A.PREV_TVL_COUNT
+END AS PREV_TVL_COUNT,
+CASE WHEN B.PREV_CALL_COUNT IS NULL THEN 0
+     ELSE B.PREV_CALL_COUNT
+END AS PREV_CALL_COUNT,
+B.IVR_CALL_ID1,
+B.IVR_CALL_ID2,
+B.IVR_CALL_ID3,
+B.IVR_CALL_ID4,
+B.IVR_CALL_ID5,
+B.IVR_CALL_ID6,
+B.IVR_CALL_ID7,
+B.IVR_CALL_ID8,
+B.IVR_CALL_ID9,
+B.IVR_CALL_ID10,
+B.CALL_TS1,
+B.CALL_TS2,
+B.CALL_TS3,
+B.CALL_TS4,
+B.CALL_TS5,
+B.CALL_TS6,
+B.CALL_TS7,
+B.CALL_TS8,
+B.CALL_TS9,
+B.CALL_TS10,
+A.TVL1,
+A.TVL2,
+A.TVL3,
+A.TVL4,
+A.TVL5,
+A.TVL6,
+A.TVL7,
+A.TVL8,
+A.TVL9,
+A.TVL10,
+A.CCD1,
+A.CCD2,
+A.CCD3,
+A.CCD4,
+A.CCD5,
+A.CCD6,
+A.CCD7,
+A.CCD8,
+A.CCD9,
+A.CCD10
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE_SPARK_RT as A1
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALL_TVL_SEQ_SPARK_RT AS A
+ON A1.CUST_ID=A.CUST_ID
+AND A1.MTN=A.MTN
+AND A1.ACCT_NUM=A.ACCT_NUM
+AND A1.CUST_LINE_SEQ_ID=A.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_SEQ_SPARK_RT AS B
+ON A1.CUST_ID=B.CUST_ID
+AND A1.MTN=B.MTN
+AND A1.ACCT_NUM=B.ACCT_NUM
+AND A1.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID""")
+
+
+    ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL.createOrReplaceTempView('ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL_SPARK_RT SELECT * FROM ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL')
+
+    VZSOI_INTL_CALLTOPICS=spark.sql('select * from vzw_soi_prd_tbls.VZSOI_INTL_CALLTOPICS_v1')
+    VZSOI_INTL_CALLTOPICS.persist(pyspark.StorageLevel.MEMORY_AND_DISK)
+    VZSOI_INTL_CALLTOPICS.createOrReplaceTempView('VZSOI_INTL_CALLTOPICS')
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS1=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary1_topic,
+B.SECONDARY_TOPIC as secondary1_topic
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as b
+WHERE A.CALL_SEQ=1
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS1.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS1')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS1_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS1')
+
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS2=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary2_topic,
+B.SECONDARY_TOPIC as secondary2_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as b
+WHERE A.CALL_SEQ=2
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS2.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS2')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS2_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS2')
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS3=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary3_topic,
+B.SECONDARY_TOPIC as secondary3_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as b
+WHERE A.CALL_SEQ=3
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS3.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS3')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS3_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS3')
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS4=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary4_topic,
+B.SECONDARY_TOPIC as secondary4_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as b
+WHERE A.CALL_SEQ=4
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS4.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS4')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS4_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS4')
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS5=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary5_topic,
+B.SECONDARY_TOPIC as secondary5_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as b
+WHERE A.CALL_SEQ=5
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS5.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS5')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS5_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS5')
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS6=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary6_topic,
+B.SECONDARY_TOPIC as secondary6_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as B
+WHERE A.CALL_SEQ=6
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS6.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS6')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS6_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS6')
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS7=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary7_topic,
+B.SECONDARY_TOPIC as secondary7_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as B
+WHERE A.CALL_SEQ=7
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS7.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS7')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS7_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS7')
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS8=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary8_topic,
+B.SECONDARY_TOPIC as secondary8_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as B
+WHERE A.CALL_SEQ=8
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS8.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS8')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS8_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS8')
+
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS9=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary9_topic,
+B.SECONDARY_TOPIC as secondary9_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as B
+WHERE A.CALL_SEQ=9
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS9.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS9')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS9_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS9')
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS10=spark.sql("""
+SELECT
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary10_topic,
+B.SECONDARY_TOPIC as secondary10_topic
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT as  A,
+VZSOI_INTL_CALLTOPICS as B
+WHERE A.CALL_SEQ=10
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+    ITP_SAD_INTER_DLY_CALL_TVL_TOPICS10.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_TVL_TOPICS10')
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_INTER_DLY_CALL_TVL_TOPICS10_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_TVL_TOPICS10')
+
+
+    ITP_SAD_INTER_DLY_CALL_CUST_ETHNICITY=spark.sql('SELECT DISTINCT CUST_ID,ACCT_NUM,CUST_LINE_SEQ_ID,MTN,ETHNICITY_SEGMT FROM VZW_UDA_PRD_ALLVM.SUBS_SUM_FACT_V WHERE RPT_MTH = TO_DATE(\'' + from_date + '\') AND ENDING_CUSTOMERS = 1 AND VSN_CUST_TYPE_CD = \'PE\' AND REV_GEN_IND = \'Y\'')
+    ITP_SAD_INTER_DLY_CALL_CUST_ETHNICITY.createOrReplaceTempView('ITP_SAD_INTER_DLY_CALL_CUST_ETHNICITY')
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_CUST_ETHNICITY_SPARK_RT SELECT * FROM ITP_SAD_INTER_DLY_CALL_CUST_ETHNICITY')
+
+
+    itp_sad_cust_dly_one_msg = spark.sql("""
+select
+v.cust_id,v.cust_line_seq_id,v.acct_num,v.mtn,v.msg_date,v.msg_timestamp,v.topic,v.Alert_Type,
+ROW_NUMBER() OVER (PARTITION BY  v.CUST_ID,v.ACCT_NUM,v.MTN,v.cust_line_seq_id
+ORDER BY v.MSG_TIMESTAMP DESC) AS MSG_SEQ
+from
+(select * from
+(SELECT distinct
+cust_id,cust_line_seq_id,acct_num,mtn,document_submit_dt as msg_date,
+CONCAT(document_submit_dt,' ',document_submit_tm) as msg_timestamp,
+sms_reqt_type as topic,
+CASE when  lower(sms_reqt_type) like '%travel%' then 'TP_SMS'
+when  lower(sms_reqt_type) like '%international%' or lower(sms_reqt_type) like '%intl%' then 'International_SMS'
+when  lower(sms_reqt_type) like '%bill%' or lower(sms_reqt_type) like '%payment%' then 'BILL_SMS'
+when  lower(sms_reqt_type) like '%data%'  then 'Data_SMS'
+when  lower(sms_reqt_type) like '%daypass%'  then 'Daypass_SMS'
+when  lower(sms_reqt_type) like '%dial%' then 'settings'
+else 'Other_SMS' end as Alert_Type
+FROM VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_ONEMSG_SMS_SUMMARY )a
+where a.Alert_Type !='Other_SMS')v
+WHERE v.msg_date >=date_sub(current_date(),7)""")
+
+    itp_sad_cust_dly_one_msg.createOrReplaceTempView('itp_sad_cust_dly_one_msg')
+
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.itp_sad_cust_dly_one_msg_SPARK_RT SELECT * FROM itp_sad_cust_dly_one_msg')
+
+    from_year=from_date[0:4]
+    from_mth=from_date[5:7]
+    from_mth_trim=from_mth.lstrip('0')
+
+    rpt_from_date = (ref_date.replace(day=1) - timedelta(days=1)).replace(day=1).strftime("%Y-%m-%d")
+    rpt_from_year=rpt_from_date[0:4]
+    rpt_from_mth=rpt_from_date[5:7]
+    rpt_from_mth_trim=rpt_from_mth.lstrip('0')
+
+    rpt_rpt_from_date = (ref_date.replace(day=1) - timedelta(days=35)).replace(day=1).strftime("%Y-%m-%d")
+    rpt_rpt_from_year=rpt_rpt_from_date[0:4]
+    rpt_rpt_from_mth=rpt_rpt_from_date[5:7]
+    rpt_rpt_from_mth_trim=rpt_rpt_from_mth.lstrip('0')
+
+    m= rpt_from_year+rpt_from_mth
+
+    BILLING_COLUMN_DETAILS= spark.sql("""
+SELECT A.* FROM (
+SELECT A.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN ORDER BY  A.BILL_CYCLE_DT DESC) AS BILL_SEQ
+FROM (
+SELECT
+A.CUST_ID,A.ACCT_NUM,H.CUST_LINE_SEQ_ID,
+A.MTN, A.IVR_CALL_ID,A.CALL_START_TM_STMP ,
+H.BILL_CYCLE_DT , H.PYMNT_DUE_DT, H.FEAT_AMT,
+H.PREV_DUE_AMT,H.PYMNT_RECVD_AMT  , H.PYMNT_REVRS_AMT ,
+H.BILL_BAL_AMT, H.LATE_PYMNT_CHRG_AMT , H.OCC_AMT,
+H.BILL_CURR_AMT , H.BILL_TOT_AMT , H.BILL_30_DAY_AMT,
+H.BILL_90_DAY_AMT ,H.BILL_180_DAY_AMT , H.BILL_CYCLE_IND ,
+H.BILL_6_MTH_AVG,H.CYC_MTH_YR
+FROM
+(select distinct * from (
+select
+A.*,B.IVR_CALL_ID,B.CALL_START_TM_STMP
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL_SPARK_RT AS A
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT WHERE CALL_SEQ=1)AS B
+ON A.CUST_ID=B.CUST_ID
+AND A.ACCT_NUM=B.ACCT_NUM
+AND A.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID
+AND A.MTN=B.MTN
+) as A
+) as A
+LEFT OUTER JOIN
+(SELECT
+H.CUST_ID,H.ACCT_NUM,H.MTN,H.CUST_LINE_SEQ_ID,
+H.BILL_CYCLE_DT , H.PYMNT_DUE_DT, H.FEAT_AMT, H.PREV_DUE_AMT,
+H.PYMNT_RECVD_AMT  , H.PYMNT_REVRS_AMT , H.BILL_BAL_AMT,
+H.LATE_PYMNT_CHRG_AMT , H.OCC_AMT, H.BILL_CURR_AMT , H.BILL_TOT_AMT ,
+H.BILL_30_DAY_AMT, H.BILL_90_DAY_AMT , H.BILL_180_DAY_AMT ,
+H.BILL_CYCLE_IND , H.BILL_6_MTH_AVG,H.CYC_MTH_YR
+FROM
+(SELECT H.*
+FROM VZW_SOI_PRD_TBLS.vzsoi_semantic_cust_bill_base_summary H
+WHERE CYC_MTH_YR={}) AS H) AS H
+ON A.CUST_ID =H.CUST_ID
+AND A.ACCT_NUM = H.ACCT_NUM
+AND A.MTN =H.MTN
+where  H.BILL_CYCLE_DT < current_date()
+) AS A
+) AS A
+WHERE BILL_SEQ=1""".format(m))
+
+    BILLING_COLUMN_DETAILS.createOrReplaceTempView('BILLING_COLUMN_DETAILS')
+
+    spark.sql('INSERT OVERWRITE TABLE VZW_SOI_PRD_TBLS.BILLING_COLUMN_DETAILS_SPARK_RT SELECT * FROM BILLING_COLUMN_DETAILS')
+
+    OCC_COLUMN_DETAILS= spark.sql("""
+SELECT A.* FROM (
+SELECT A.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN ORDER BY  A.TRANS_DT DESC) AS BILL_SEQ
+FROM (
+SELECT
+A.CUST_ID,A.ACCT_NUM,A.MTN,H.CUST_LINE_SEQ_ID,
+A.IVR_CALL_ID,A.CALL_START_TM_STMP ,
+H.OCC_CDV ,
+H.OCC_AMTV, H.OCC_TYPE_CDV, H.OCC_DESC ,H.occ_reasons,
+H.TRANS_DT,H.AGG_OCC_VALUE,H.CYC_MTH_YR
+FROM
+(select distinct * from (
+select
+A.*,B.IVR_CALL_ID,B.CALL_START_TM_STMP
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL_SPARK_RT AS A
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT WHERE CALL_SEQ=1)AS B
+ON A.CUST_ID=B.CUST_ID
+AND A.ACCT_NUM=B.ACCT_NUM
+AND A.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID
+AND A.MTN=B.MTN
+) as A
+) as A
+LEFT OUTER JOIN
+(SELECT
+H.CUST_ID,H.ACCT_NUM,H.MTN,H.CUST_LINE_SEQ_ID,
+H.BILL_CYCLE_DT ,
+H.OCC_CDV ,
+H.OCC_AMTV,
+H.OCC_TYPE_CDV,
+H.OCC_DESC ,H.AGG_OCC_VALUE,H.CYC_MTH_YR,
+CASE WHEN lower(H.occ_desc) like '%TRAVELPASS%' THEN 'occ_trvlpass'
+                when lower(H.occ_desc) like '%intl trv%' or lower(H.occ_desc) like '%intl call%' or lower(H.occ_desc) like '%int tvl%' or  lower(H.occ_desc) like '%international%' then 'International_charges'
+                when lower(H.occ_desc) like '%can%' or lower(H.occ_desc) like'%mex%' or lower(H.occ_desc) like '%can/mex%' or lower(H.occ_desc) like '%cn/mx%' then 'CAN_MEX_CHARGES'
+                when lower(H.occ_desc) like '%roam%' then 'ROAMING'
+                when lower(H.occ_desc) like '%int%' or lower(H.occ_desc) like '%high speed%' then 'data_usg_charges'
+                else 'General_reasons' end as occ_reasons,
+H.TRANS_DT
+FROM
+(SELECT H.*
+FROM VZW_SOI_PRD_TBLS.vzsoi_semantic_cust_bill_base_summary H
+WHERE CYC_MTH_YR={})AS H ) as H
+ON A.CUST_ID =H.CUST_ID
+AND A.ACCT_NUM = H.ACCT_NUM
+AND A.MTN =H.MTN
+where  H.TRANS_DT < current_date()
+) AS A
+) AS A
+WHERE BILL_SEQ=1""".format(m))
+
+    OCC_COLUMN_DETAILS.createOrReplaceTempView('OCC_COLUMN_DETAILS')
+
+    spark.sql('INSERT OVERWRITE TABLE OCC_COLUMN_DETAILS_SPARK_RT SELECT * FROM OCC_COLUMN_DETAILS')
+
+    n=rpt_from_year+rpt_from_mth
+    BILLING_COLUMN_DETAILS_PREV_MTH = spark.sql("""
+
+SELECT A.* FROM (
+SELECT A.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN ORDER BY  A.BILL_CYCLE_DT DESC) AS BILL_SEQ
+FROM (
+SELECT
+A.CUST_ID,A.ACCT_NUM,H.CUST_LINE_SEQ_ID,
+A.MTN, A.IVR_CALL_ID,A.CALL_START_TM_STMP ,
+H.BILL_CYCLE_DT , H.PYMNT_DUE_DT, H.FEAT_AMT,
+H.PREV_DUE_AMT,H.PYMNT_RECVD_AMT  , H.PYMNT_REVRS_AMT ,
+H.BILL_BAL_AMT, H.LATE_PYMNT_CHRG_AMT , H.OCC_AMT,
+H.BILL_CURR_AMT , H.BILL_TOT_AMT , H.BILL_30_DAY_AMT,
+H.BILL_90_DAY_AMT ,H.BILL_180_DAY_AMT , H.BILL_CYCLE_IND ,
+H.BILL_6_MTH_AVG,H.CYC_MTH_YR
+FROM
+(select distinct * from (
+select
+A.*,B.IVR_CALL_ID,B.CALL_START_TM_STMP
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL_SPARK_RT AS A
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT WHERE CALL_SEQ=1)AS B
+ON A.CUST_ID=B.CUST_ID
+AND A.ACCT_NUM=B.ACCT_NUM
+AND A.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID
+AND A.MTN=B.MTN
+) as A
+) as A
+LEFT OUTER JOIN
+(SELECT
+H.CUST_ID,H.ACCT_NUM,H.MTN,H.CUST_LINE_SEQ_ID,
+H.BILL_CYCLE_DT , H.PYMNT_DUE_DT, H.FEAT_AMT, H.PREV_DUE_AMT,
+H.PYMNT_RECVD_AMT  , H.PYMNT_REVRS_AMT , H.BILL_BAL_AMT,
+H.LATE_PYMNT_CHRG_AMT , H.OCC_AMT, H.BILL_CURR_AMT , H.BILL_TOT_AMT ,
+H.BILL_30_DAY_AMT, H.BILL_90_DAY_AMT , H.BILL_180_DAY_AMT ,
+H.BILL_CYCLE_IND , H.BILL_6_MTH_AVG,H.CYC_MTH_YR
+FROM
+(SELECT H.*
+FROM VZW_SOI_PRD_TBLS.vzsoi_semantic_cust_bill_base_summary H
+WHERE CYC_MTH_YR={}) AS H) AS H
+ON A.CUST_ID =H.CUST_ID
+AND A.ACCT_NUM = H.ACCT_NUM
+AND A.MTN =H.MTN
+where  H.BILL_CYCLE_DT < current_date()
+) AS A
+) AS A
+WHERE BILL_SEQ=1""".format(n))
+
+
+    BILLING_COLUMN_DETAILS_PREV_MTH.createOrReplaceTempView('BILLING_COLUMN_DETAILS_PREV_MTH')
+
+    spark.sql('INSERT OVERWRITE TABLE BILLING_COLUMN_DETAILS_PREV_MTH_SPARK_RT SELECT * FROM BILLING_COLUMN_DETAILS_PREV_MTH')
+
+
+    OCC_COLUMN_DETAILS_PREV_MTH=spark.sql("""
+SELECT A.* FROM (
+SELECT A.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN ORDER BY  A.TRANS_DT DESC) AS BILL_SEQ
+FROM (
+SELECT
+A.CUST_ID,A.ACCT_NUM,A.MTN,H.CUST_LINE_SEQ_ID,
+A.IVR_CALL_ID,A.CALL_START_TM_STMP ,
+H.OCC_CDV ,
+H.OCC_AMTV, H.OCC_TYPE_CDV, H.OCC_DESC ,H.occ_reasons,
+H.TRANS_DT,H.AGG_OCC_VALUE,H.CYC_MTH_YR
+FROM
+(select distinct * from (
+select
+A.*,B.IVR_CALL_ID,B.CALL_START_TM_STMP
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL_SPARK_RT AS A
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT WHERE CALL_SEQ=1)AS B
+ON A.CUST_ID=B.CUST_ID
+AND A.ACCT_NUM=B.ACCT_NUM
+AND A.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID
+AND A.MTN=B.MTN
+) as A
+) as A
+LEFT OUTER JOIN
+(SELECT
+H.CUST_ID,H.ACCT_NUM,H.MTN,H.CUST_LINE_SEQ_ID,
+H.BILL_CYCLE_DT ,
+H.OCC_CDV ,
+H.OCC_AMTV,
+H.OCC_TYPE_CDV,
+H.OCC_DESC ,H.AGG_OCC_VALUE,H.CYC_MTH_YR,
+CASE WHEN lower(H.occ_desc) like '%TRAVELPASS%' THEN 'occ_trvlpass'
+                when lower(H.occ_desc) like '%intl trv%' or lower(H.occ_desc) like '%intl call%' or lower(H.occ_desc) like '%int tvl%' or  lower(H.occ_desc) like '%international%' then 'International_charges'
+                when lower(H.occ_desc) like '%can%' or lower(H.occ_desc) like'%mex%' or lower(H.occ_desc) like '%can/mex%' or lower(H.occ_desc) like '%cn/mx%' then 'CAN_MEX_CHARGES'
+                when lower(H.occ_desc) like '%roam%' then 'ROAMING'
+                when lower(H.occ_desc) like '%int%' or lower(H.occ_desc) like '%high speed%' then 'data_usg_charges'
+                else 'General_reasons' end as occ_reasons,
+H.TRANS_DT
+FROM
+(SELECT H.*
+FROM VZW_SOI_PRD_TBLS.vzsoi_semantic_cust_bill_base_summary H
+WHERE CYC_MTH_YR={})AS H ) as H
+ON A.CUST_ID =H.CUST_ID
+AND A.ACCT_NUM = H.ACCT_NUM
+AND A.MTN =H.MTN
+where  H.TRANS_DT < current_date()
+) AS A
+) AS A
+WHERE BILL_SEQ=1""".format(n))
+
+    OCC_COLUMN_DETAILS_PREV_MTH.createOrReplaceTempView('OCC_COLUMN_DETAILS_PREV_MTH')
+
+    spark.sql('INSERT OVERWRITE TABLE OCC_COLUMN_DETAILS_PREV_MTH_SPARK_RT SELECT * FROM OCC_COLUMN_DETAILS')
+
+    o=rpt_rpt_from_year+rpt_rpt_from_mth
+    BILLING_COLUMN_DETAILS_PREV_2MTH=spark.sql("""
+
+SELECT A.* FROM (
+SELECT A.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN ORDER BY  A.BILL_CYCLE_DT DESC) AS BILL_SEQ
+FROM (
+SELECT
+A.CUST_ID,A.ACCT_NUM,H.CUST_LINE_SEQ_ID,
+A.MTN, A.IVR_CALL_ID,A.CALL_START_TM_STMP ,
+H.BILL_CYCLE_DT , H.PYMNT_DUE_DT, H.FEAT_AMT,
+H.PREV_DUE_AMT,H.PYMNT_RECVD_AMT  , H.PYMNT_REVRS_AMT ,
+H.BILL_BAL_AMT, H.LATE_PYMNT_CHRG_AMT , H.OCC_AMT,
+H.BILL_CURR_AMT , H.BILL_TOT_AMT , H.BILL_30_DAY_AMT,
+H.BILL_90_DAY_AMT ,H.BILL_180_DAY_AMT , H.BILL_CYCLE_IND ,
+H.BILL_6_MTH_AVG,H.CYC_MTH_YR
+FROM
+(select distinct * from (
+select
+A.*,B.IVR_CALL_ID,B.CALL_START_TM_STMP
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL_SPARK_RT AS A
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT WHERE CALL_SEQ=1)AS B
+ON A.CUST_ID=B.CUST_ID
+AND A.ACCT_NUM=B.ACCT_NUM
+AND A.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID
+AND A.MTN=B.MTN
+) as A
+) as A
+LEFT OUTER JOIN
+(SELECT
+H.CUST_ID,H.ACCT_NUM,H.MTN,H.CUST_LINE_SEQ_ID,
+H.BILL_CYCLE_DT , H.PYMNT_DUE_DT, H.FEAT_AMT, H.PREV_DUE_AMT,
+H.PYMNT_RECVD_AMT  , H.PYMNT_REVRS_AMT , H.BILL_BAL_AMT,
+H.LATE_PYMNT_CHRG_AMT , H.OCC_AMT, H.BILL_CURR_AMT , H.BILL_TOT_AMT ,
+H.BILL_30_DAY_AMT, H.BILL_90_DAY_AMT , H.BILL_180_DAY_AMT ,
+H.BILL_CYCLE_IND , H.BILL_6_MTH_AVG,H.CYC_MTH_YR
+FROM
+(SELECT H.*
+FROM VZW_SOI_PRD_TBLS.vzsoi_semantic_cust_bill_base_summary H
+WHERE CYC_MTH_YR={}) AS H) AS H
+ON A.CUST_ID =H.CUST_ID
+AND A.ACCT_NUM = H.ACCT_NUM
+AND A.MTN =H.MTN
+where  H.BILL_CYCLE_DT < current_date()
+) AS A
+) AS A
+WHERE BILL_SEQ=1""".format(o))
+
+    BILLING_COLUMN_DETAILS_PREV_2MTH.createOrReplaceTempView('BILLING_COLUMN_DETAILS_PREV_2MTH')
+
+    spark.sql('INSERT OVERWRITE TABLE BILLING_COLUMN_DETAILS_PREV_2MTH_SPARK_RT SELECT * FROM BILLING_COLUMN_DETAILS_PREV_2MTH')
+
+
+    OCC_COLUMN_DETAILS_PREV_2MTH=spark.sql("""
+
+SELECT A.* FROM (
+SELECT A.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN ORDER BY  A.TRANS_DT DESC) AS BILL_SEQ
+FROM (
+SELECT
+A.CUST_ID,A.ACCT_NUM,A.MTN,H.CUST_LINE_SEQ_ID,
+A.IVR_CALL_ID,A.CALL_START_TM_STMP ,
+H.OCC_CDV ,
+H.OCC_AMTV, H.OCC_TYPE_CDV, H.OCC_DESC ,H.occ_reasons,
+H.TRANS_DT,H.AGG_OCC_VALUE,H.CYC_MTH_YR
+FROM
+(select distinct * from (
+select
+A.*,B.IVR_CALL_ID,B.CALL_START_TM_STMP
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL_SPARK_RT AS A
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT WHERE CALL_SEQ=1)AS B
+ON A.CUST_ID=B.CUST_ID
+AND A.ACCT_NUM=B.ACCT_NUM
+AND A.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID
+AND A.MTN=B.MTN
+) as A
+) as A
+LEFT OUTER JOIN
+(SELECT
+H.CUST_ID,H.ACCT_NUM,H.MTN,H.CUST_LINE_SEQ_ID,
+H.BILL_CYCLE_DT ,
+H.OCC_CDV ,
+H.OCC_AMTV,
+H.OCC_TYPE_CDV,
+H.OCC_DESC ,H.AGG_OCC_VALUE,H.CYC_MTH_YR,
+CASE WHEN lower(H.occ_desc) like '%TRAVELPASS%' THEN 'occ_trvlpass'
+                when lower(H.occ_desc) like '%intl trv%' or lower(H.occ_desc) like '%intl call%' or lower(H.occ_desc) like '%int tvl%' or  lower(H.occ_desc) like '%international%' then 'International_charges'
+                when lower(H.occ_desc) like '%can%' or lower(H.occ_desc) like'%mex%' or lower(H.occ_desc) like '%can/mex%' or lower(H.occ_desc) like '%cn/mx%' then 'CAN_MEX_CHARGES'
+                when lower(H.occ_desc) like '%roam%' then 'ROAMING'
+                when lower(H.occ_desc) like '%int%' or lower(H.occ_desc) like '%high speed%' then 'data_usg_charges'
+                else 'General_reasons' end as occ_reasons,
+H.TRANS_DT
+FROM
+(SELECT H.*
+FROM VZW_SOI_PRD_TBLS.vzsoi_semantic_cust_bill_base_summary H
+WHERE CYC_MTH_YR={})AS H ) as H
+ON A.CUST_ID =H.CUST_ID
+AND A.ACCT_NUM = H.ACCT_NUM
+AND A.MTN =H.MTN
+where  H.TRANS_DT < current_date()
+) AS A
+) AS A
+WHERE BILL_SEQ=1""".format(o))
+
+    OCC_COLUMN_DETAILS_PREV_2MTH.createOrReplaceTempView('OCC_COLUMN_DETAILS_PREV_2MTH')
+
+    spark.sql('INSERT OVERWRITE TABLE OCC_COLUMN_DETAILS_PREV_2MTH_SPARK_RT SELECT * FROM OCC_COLUMN_DETAILS_PREV_2MTH')
+
+    p=rpt_from_year + ' ' + rpt_from_mth_trim
+    ITP_INTER_DLY_called_FINAL= spark.sql("""
+SELECT DISTINCT
+A.CUST_ID ,A.ACCT_NUM ,A.MTN ,
+A.CUST_LINE_SEQ_ID,
+F.ETHNICITY_SEGMT  AS ETHNICITY,
+YEAR (CURRENT_DATE ) -E.BIRTH_YEAR AS AGE,
+E.CUST_ESTB_DT ,
+E.PPLAN_EFF_DT ,
+E.LINE_ACT_DT ,
+E.MTN_ACT_DT ,
+E.LINE_TERM_DT ,
+E.CNTRCT_TERM_DT,
+E.BIRTH_YEAR ,
+E.PPLAN_CD ,
+E.PPLAN_TYPE_CD ,
+E.PPLAN_DESC ,
+E.ACCESS_AMT ,
+E.DATA_ACCESS_AMT ,
+E.ANLG_DGTL_IND ,
+E.CNTRCT_TERM_IND ,
+E.PREPAID_IND ,
+E.PPLAN_BNDL_TYPE_CD ,
+E.BI_PPLAN_DESC ,
+E.BI_PPLAN_DESC_ABBRV ,
+E.BI_PPLAN_SERVICE_TYPE_DESC ,
+E.BI_PPLAN_TYPE_DESC ,
+E.BI_PPLAN_CTGRY_DESC ,
+E.BI_DATA_ALLOW_TIER_VALUE ,
+E.BI_DATA_ALLOW_TIER_UNIT_MEAS ,
+E.BI_RPT_PPLAN_DESC ,
+E.MSG_ALLOW_SHARE_IND,
+E.DATA_ALLOW_SHARE_IND ,
+E.VOICE_ALLOW_SHARE_IND ,
+E.ACTIVITY_CD ,
+E.svc_prod_id1 ,
+E.svc_prod_desc1 ,
+E.SVC_PROD_ID2 ,
+E.SVC_PROD_DESC2 ,
+E.SVC_PROD_ID3 ,
+E.SVC_PROD_DESC3 ,
+E.mtrans_ts1,
+E.mtrans_ts2,
+E.mtrans_ts3,
+CASE WHEN LOWER(E.SVC_PROD_DESC1) LIKE '%1mo%' OR LOWER(E.SVC_PROD_DESC1) LIKE '%month%' THEN 'MONTHLY'
+WHEN LOWER(E.SVC_PROD_DESC1) LIKE '%canada%' OR LOWER(E.SVC_PROD_DESC1) LIKE '%mex%' THEN 'INCLUDED'
+WHEN LOWER(E.SVC_PROD_DESC1) LIKE '%high%' OR LOWER(E.SVC_PROD_DESC1) LIKE '%speed%' THEN 'HIGH_SPEED_DATA'
+ELSE 'DAILY' END AS TP_TYPE1,
+CASE WHEN LOWER(E.SVC_PROD_DESC2) LIKE '%1mo%' OR LOWER(E.SVC_PROD_DESC2) LIKE '%month%' THEN 'MONTHLY'
+WHEN LOWER(E.SVC_PROD_DESC2) LIKE '%canada%' OR LOWER(E.SVC_PROD_DESC2) LIKE '%mex%' THEN 'INCLUDED'
+WHEN LOWER(E.SVC_PROD_DESC2) LIKE '%high%' OR LOWER(E.SVC_PROD_DESC2) LIKE '%speed%' THEN 'HIGH_SPEED_DATA'
+ELSE 'DAILY' END AS TP_TYPE2,
+CASE WHEN LOWER(E.SVC_PROD_DESC3) LIKE '%1mo%' OR LOWER(E.SVC_PROD_DESC3) LIKE '%month%' THEN 'MONTHLY'
+WHEN LOWER(E.SVC_PROD_DESC3) LIKE '%canada%' OR LOWER(E.SVC_PROD_DESC3) LIKE '%mex%' THEN 'INCLUDED'
+WHEN LOWER(E.SVC_PROD_DESC3) LIKE '%high%' OR LOWER(E.SVC_PROD_DESC3) LIKE '%speed%' THEN 'HIGH_SPEED_DATA'
+ELSE 'DAILY' END AS TP_TYPE3,
+E.svc_prod_chrg_amt1 ,
+E.svc_prod_treat_cd1 ,
+E.max_svc_prod_eff_dt1,
+case when E.svc_prod_id1 IN ('383', '1344','1252','1107', '1115', '1081','427','428','441','434','443','442','446','426','425','424',
+'1324','1327','445','444','423','422','1328','1328','1329','1329','1324','1327','412','431','432','433','1195', '1198','384','683','1045') THEN 'Paid'
+when E.svc_prod_id1 IN ('691', '988', '1255','1046', '692', '987', '1256')
+AND E.BI_PPLAN_DESC IN
+('GO UNLIMITED','beyond UNLIMITED','ABOVE UNLIMITED (SMARTPHONE)')
+THEN 'Free'
+ELSE 'PAID'
+END AS FREE_PLAN,
+E.line_type,
+E.age_group,
+E.prod_nm,
+E.device_prod_nm,
+E.device_type_cd,
+E.device_brand_nm,
+CASE WHEN LOWER(E.DEVICE_BRAND_NM) LIKE '%iphone%'  THEN 'IPHONE'
+WHEN LOWER(E.DEVICE_BRAND_NM) LIKE '%samsung%' OR LOWER(DEVICE_BRAND_NM) LIKE '%galaxy%' THEN 'SAMSUNG'
+WHEN LOWER(E.DEVICE_BRAND_NM) LIKE '%moto%'  THEN 'MOTOROLA'
+WHEN LOWER(E.DEVICE_BRAND_NM) LIKE '%lg%'  THEN 'LG'
+WHEN LOWER(E.DEVICE_BRAND_NM) LIKE '%pixel%'  THEN 'PIXEL'
+ELSE 'OTHERS' END AS DEVICE_TYPE,
+E.device_compat,
+E.byod_flag,
+E.vz_device,
+E.tvl_pass_included,
+E.can_mex_free_plan,
+E.region_desc,
+E.adults_in_hshld,
+E.marital_status,
+E.child_in_hshld,
+E.gender_input,
+E.presence_young_adult,
+E.presence_sr_adult,
+E.internet_user_ind,
+E.hshld_size,
+E.religious_desc,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_CYCLE_DT ELSE  H.BILL_CYCLE_DT END AS  BILL_CYCLE_DT ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.PYMNT_DUE_DT ELSE H.PYMNT_DUE_DT END AS PYMNT_DUE_DT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.FEAT_AMT ELSE H.FEAT_AMT END AS FEAT_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.PREV_DUE_AMT ELSE H.PREV_DUE_AMT END AS  PREV_DUE_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.PYMNT_RECVD_AMT   ELSE H.PYMNT_RECVD_AMT END AS PYMNT_RECVD_AMT  ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.PYMNT_REVRS_AMT ELSE H.PYMNT_REVRS_AMT END AS  PYMNT_REVRS_AMT ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_BAL_AMT  ELSE H.BILL_BAL_AMT END AS  BILL_BAL_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.LATE_PYMNT_CHRG_AMT  ELSE H.LATE_PYMNT_CHRG_AMT END AS LATE_PYMNT_CHRG_AMT ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.OCC_AMT  ELSE H.OCC_AMT END AS  OCC_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_CURR_AMT ELSE H.BILL_CURR_AMT END AS BILL_CURR_AMT ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_TOT_AMT ELSE H.BILL_TOT_AMT END AS BILL_TOT_AMT ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_30_DAY_AMT ELSE H.BILL_30_DAY_AMT END AS  BILL_30_DAY_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_90_DAY_AMT ELSE H.BILL_90_DAY_AMT END AS BILL_90_DAY_AMT ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_180_DAY_AMT ELSE H.BILL_180_DAY_AMT END AS BILL_180_DAY_AMT ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_CYCLE_IND ELSE H.BILL_CYCLE_IND END AS BILL_CYCLE_IND ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  L.BILL_6_MTH_AVG ELSE H.BILL_6_MTH_AVG END AS  BILL_6_MTH_AVG,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  LO.OCC_CDV ELSE HO.OCC_CDV END AS OCC_CDV ,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  LO.OCC_AMTV  ELSE HO.OCC_AMTV END AS  OCC_AMTV,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  LO.OCC_TYPE_CDV ELSE HO.OCC_TYPE_CDV END AS  OCC_TYPE_CDV,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  LO.OCC_DESC ELSE HO.OCC_DESC END AS OCC_DESC_REF ,
+CASE WHEN HO.TRANS_DT IS NULL THEN  LO.OCC_REASONS ELSE HO.OCC_REASONS END AS OCC_REASONS,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  LO.TRANS_DT  ELSE  HO.TRANS_DT     END  AS TRANS_DT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  LO.AGG_OCC_VALUE   ELSE  HO.AGG_OCC_VALUE    END  AS AGG_OCC_VALUE,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  LO.CYC_MTH_YR   ELSE  HO.CYC_MTH_YR   END  AS CYC_MTH_YR,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_CYCLE_DT ELSE L.BILL_CYCLE_DT END   AS PREV_BILL_CYCLE_DT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.PYMNT_DUE_DT ELSE L.PYMNT_DUE_DT    END  AS  PREV_PYMNT_DUE_DT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.FEAT_AMT   ELSE   L.FEAT_AMT    END  AS PREV_FEAT_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.PREV_DUE_AMT    ELSE  L.PREV_DUE_AMT   END  AS PREV_PREV_DUE_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.PYMNT_RECVD_AMT    ELSE  L.PYMNT_RECVD_AMT    END  AS PREV_PYMNT_RECVD_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.PYMNT_REVRS_AMT   ELSE  L.PYMNT_REVRS_AMT    END  AS PREV_PYMNT_REVRS_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_BAL_AMT  ELSE   L.BILL_BAL_AMT  END   AS PREV_BILL_BAL_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.LATE_PYMNT_CHRG_AMT   ELSE   L.LATE_PYMNT_CHRG_AMT   END  AS PREV_LATE_PYMNT_CHRG_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.OCC_AMT    ELSE  L.OCC_AMT   END  AS PREV_OCC_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_CURR_AMT   ELSE  L.BILL_CURR_AMT   END  AS PREV_BILL_CURR_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_TOT_AMT   ELSE   L.BILL_TOT_AMT   END  AS PREV_BILL_TOT_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_30_DAY_AMT   ELSE  L.BILL_30_DAY_AMT     END  AS PREV_BILL_30_DAY_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_90_DAY_AMT  ELSE  L.BILL_90_DAY_AMT    END  AS PREV_BILL_90_DAY_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_180_DAY_AMT   ELSE  L.BILL_180_DAY_AMT   END  AS PREV_BILL_180_DAY_AMT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_CYCLE_IND  ELSE  L.BILL_CYCLE_IND   END   AS PREV_BILL_CYCLE_IND,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  N.BILL_6_MTH_AVG   ELSE  L.BILL_6_MTH_AVG   END  AS PREV_BILL_6_MTH_AVG,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  NP.OCC_CDV   ELSE  LO.OCC_CDV    END  AS PREV_OCC_CDV,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  NP.OCC_AMTV   ELSE LO.OCC_AMTV    END  AS PREV_OCC_AMTV,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  NP.OCC_TYPE_CDV   ELSE LO.OCC_TYPE_CDV    END  AS PREV_OCC_TYPE_CDV,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  NP.OCC_DESC  ELSE LO.OCC_DESC    END   AS PREV_OCC_DESC,
+CASE WHEN HO.TRANS_DT IS NULL THEN  NP.OCC_REASONS ELSE LO.OCC_REASONS END AS PREV_OCC_REASONS,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  NP.TRANS_DT  ELSE  LO.TRANS_DT     END  AS PREV_TRANS_DT,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  NP.AGG_OCC_VALUE   ELSE  LO.AGG_OCC_VALUE    END  AS PREV_AGG_OCC_VALUE,
+CASE WHEN H.CYC_MTH_YR IS NULL THEN  NP.CYC_MTH_YR   ELSE  LO.CYC_MTH_YR   END  AS PREV_CYC_MTH_YR,
+I.total_data_allow,
+I.plan_data_allow,
+I.bonus_data_allow,
+I.sls_outlet_id,
+I.tenure,
+I.true_plan_data_allow,
+I.true_bonus_data_allow,
+I.gift_data_allow,
+I.true_total_data_allow,
+I.over_used,
+I.avgg,
+I.thsld,
+I.data_threshold,
+A.TVL1 ,A.TVL2 ,A.TVL3 ,A.TVL4,A.TVL5,
+A.TVL6 ,A.TVL7 ,A.TVL8 ,A.TVL9,
+A.TVL10,A.CCD1 ,A.CCD2 ,A.CCD3 ,A.CCD4 ,A.CCD5 ,
+A.CCD6 ,A.CCD7 ,A.CCD8 ,A.CCD9 ,A.CCD10 ,
+A.CALL_TS1,  A.CALL_TS2 ,A. CALL_TS3,
+A.CALL_TS4 ,A.CALL_TS5,A.CALL_TS6,A.CALL_TS7,
+A. CALL_TS8,   A.CALL_TS9  ,A.CALL_TS10 ,
+A.IVR_CALL_ID1,A.IVR_CALL_ID2,A.IVR_CALL_ID3,A.IVR_CALL_ID4,
+A.IVR_CALL_ID5,A.IVR_CALL_ID6, A.IVR_CALL_ID7,A.IVR_CALL_ID8,
+A.IVR_CALL_ID9,A.IVR_CALL_ID10,
+CONCAT_WS('|',A.CCD1,A.CCD2,A.CCD3,A.CCD4,A.CCD5,A.CCD6,A.CCD7,A.CCD8,A.CCD9,A.CCD10) AS COUNTRY_CD_COMBO
+,A.PREV_TVL_COUNT
+,A.PREV_CALL_COUNT
+,P.CRUISE_TRAVEL_COUNT
+,M.MSG_DATE
+,M.MSG_TIMESTAMP
+,M.TOPIC
+,M.ALERT_TYPE
+,A2.PRIMARY1_TOPIC as Primary1_topic
+,A2.SECONDARY1_TOPIC as secondary1_topic
+,A3.PRIMARY2_TOPIC as Primary2_topic
+,A3.SECONDARY2_TOPIC as secondary2_topic
+,A4.PRIMARY3_TOPIC as Primary3_topic
+,A4.SECONDARY3_TOPIC as secondary3_topic
+,A5.PRIMARY4_TOPIC as Primary4_topic
+,A5.SECONDARY4_TOPIC as secondary4_topic
+,A6.PRIMARY5_TOPIC as Primary5_topic
+,A6.SECONDARY5_TOPIC as secondary5_topic
+,A7.PRIMARY6_TOPIC as Primary6_topic
+,A7.SECONDARY6_TOPIC as secondary6_topic
+,A8.PRIMARY7_TOPIC as Primary7_topic
+,A8.SECONDARY7_TOPIC as secondary7_topic
+,A9.PRIMARY8_TOPIC as Primary8_topic
+,A9.SECONDARY8_TOPIC as secondary8_topic
+,A10.PRIMARY9_TOPIC as Primary9_topic
+,A10.SECONDARY9_TOPIC as secondary9_topic
+,A11.PRIMARY10_TOPIC as Primary10_topic
+,A11.SECONDARY10_TOPIC as secondary10_topic
+FROM
+(select distinct * from (
+select
+ A.*,B.IVR_CALL_ID,B.CALL_START_TM_STMP
+FROM
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL_SPARK_RT AS A
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1_SPARK_RT WHERE CALL_SEQ=1)AS B
+ON A.CUST_ID=B.CUST_ID
+AND A.ACCT_NUM=B.ACCT_NUM
+AND A.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID
+AND A.MTN=B.MTN)
+AS A
+) as a
+LEFT OUTER JOIN (select * from (
+select a.*,
+ROW_NUMBER() OVER(partition by cust_id,mtn,acct_num,cust_line_seq_id order by cust_estb_dt desc) as rn
+from
+VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_CUSTOMER_PROFILE as a
+)as a where rn =1 ) AS E
+ON A.CUST_ID =E.CUST_ID
+AND A.ACCT_NUM = E.ACCT_NUM
+AND A.MTN =E.MTN
+AND A.CUST_LINE_SEQ_ID =E.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.BILLING_COLUMN_DETAILS_SPARK_RT) AS H
+ON A.CUST_ID =H.CUST_ID
+AND A.ACCT_NUM = H.ACCT_NUM
+AND A.MTN =H.MTN
+AND E.CUST_LINE_SEQ_ID =H.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+(SELECT * FROM  VZW_SOI_PRD_TBLS.BILLING_COLUMN_DETAILS_PREV_MTH_SPARK_RT ) AS L
+ON A.CUST_ID =L.CUST_ID
+AND A.ACCT_NUM = L.ACCT_NUM
+AND A.MTN =L.MTN
+AND E.CUST_LINE_SEQ_ID =L.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+(SELECT * FROM  VZW_SOI_PRD_TBLS.BILLING_COLUMN_DETAILS_PREV_2MTH_SPARK_RT ) AS N
+ON A.CUST_ID =N.CUST_ID
+AND A.ACCT_NUM = N.ACCT_NUM
+AND A.MTN =N.MTN
+AND E.CUST_LINE_SEQ_ID =N.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+(SELECT * FROM VZW_SOI_PRD_TBLS.OCC_COLUMN_DETAILS_SPARK_RT) AS HO
+ON A.CUST_ID =HO.CUST_ID
+AND A.ACCT_NUM = HO.ACCT_NUM
+AND A.MTN =HO.MTN
+AND E.CUST_LINE_SEQ_ID =HO.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+(SELECT * FROM  VZW_SOI_PRD_TBLS.OCC_COLUMN_DETAILS_PREV_MTH_SPARK_RT ) AS LO
+ON A.CUST_ID =LO.CUST_ID
+AND A.ACCT_NUM = LO.ACCT_NUM
+AND A.MTN =LO.MTN
+AND E.CUST_LINE_SEQ_ID =LO.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+(SELECT * FROM  VZW_SOI_PRD_TBLS.OCC_COLUMN_DETAILS_PREV_2MTH_SPARK_RT ) AS NP
+ON A.CUST_ID =NP.CUST_ID
+AND A.ACCT_NUM = NP.ACCT_NUM
+AND A.MTN =NP.MTN
+AND E.CUST_LINE_SEQ_ID =NP.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_CUST_ETHNICITY_SPARK_RT AS F
+ON A.CUST_ID=F.CUST_ID
+AND A.CUST_LINE_SEQ_ID=F.CUST_LINE_SEQ_ID
+AND A.MTN=F.MTN
+AND A.ACCT_NUM=F.ACCT_NUM
+LEFT OUTER JOIN
+(SELECT *  FROM VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_DATA_USAGE WHERE CYC_MNTH_YR='{}') I
+ON A.CUST_ID =I.CUST_ID
+AND A.MTN =I.MTN
+AND A.CUST_LINE_SEQ_ID =I.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS1_SPARK_RT AS A2
+ON trim(A.IVR_CALL_ID1)=trim(A2.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS2_SPARK_RT AS A3
+ON trim(A.IVR_CALL_ID2)=trim(A3.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS3_SPARK_RT AS A4
+ON trim(A.IVR_CALL_ID3)=trim(A4.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS4_SPARK_RT AS A5
+ON trim(A.IVR_CALL_ID4)=trim(A5.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS5_SPARK_RT AS A6
+ON trim(A.IVR_CALL_ID5)=trim(A6.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS6_SPARK_RT AS A7
+ON trim(A.IVR_CALL_ID6)=trim(A7.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS7_SPARK_RT AS A8
+ON trim(A.IVR_CALL_ID7)=trim(A8.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS8_SPARK_RT AS A9
+ON trim(A.IVR_CALL_ID8)=trim(A9.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS9_SPARK_RT AS A10
+ON trim(A.IVR_CALL_ID9)=trim(A10.IVR_ID)
+LEFT OUTER JOIN
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS10_SPARK_RT AS A11
+ON trim(A.IVR_CALL_ID10)=trim(A11.IVR_ID)
+left outer join
+(select cust_id,mtn,acct_num,cust_line_seq_id,count(*) as CRUISE_TRAVEL_COUNT from
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_TRAVEL_BASE_SPARK_RT
+where country_cd='CSP'
+group by
+cust_id,mtn,acct_num,cust_line_seq_id) as P
+on a.cust_id=P.cust_id
+and a.mtn=P.mtn
+and a.cust_line_seq_id=P.cust_line_seq_id
+and a.acct_num=P.acct_num
+LEFT OUTER JOIN
+(SELECT A.CUST_ID,A.CUST_LINE_SEQ_ID,A.ACCT_NUM,A.MTN,
+A.MSG_DATE,A.MSG_TIMESTAMP,A.TOPIC,A.ALERT_TYPE
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_ONE_MSG_SPARK_RT as A
+WHERE  MSG_SEQ=1) AS M
+ON A.CUST_ID=M.CUST_ID
+AND A.MTN=M.MTN
+AND E.CUST_LINE_SEQ_ID=M.CUST_LINE_SEQ_ID
+AND A.ACCT_NUM=M.ACCT_NUM""".format(p))
+
+    ITP_INTER_DLY_called_FINAL.createOrReplaceTempView('ITP_INTER_DLY_called_FINAL')
+
+    spark.sql('INSERT OVERWRITE TABLE ITP_INTER_DLY_called_FINAL_SPARK_RT SELECT * FROM ITP_INTER_DLY_called_FINAL')
+    ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER =spark.sql("""
+select a.*
+from
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE_SPARK_RT b
+inner join
+(select
+a.cust_id,
+a.mtn,
+a.session_start_date,
+a.pg_vst_timestamp,
+a.session_start_tm,
+a.visit_country,
+a.tp_categories as category_new,
+a.subevent1,
+a.process_dt
+from
+(select *,
+ROW_NUMBER() OVER (PARTITION BY CUST_ID,mtn,tp_categories order by session_start_tm) AS scat_seq
+from
+(select * from
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_SCAT_DESC_BASE_SPARK_RT)T)a
+where scat_seq=1)a
+on a.cust_id=b.cust_id
+and a.mtn=b.mtn""")
+
+    ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER.createOrReplaceTempView('ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER')
+
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_SPARK_RT SELECT * FROM ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER')
+
+
+
+    ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_v1=spark.sql("""
+select x.cust_id,x.mtn,
+COLLECT_SET(activate_tp)[0] as MVO_activate_tp_ind,
+COLLECT_SET(intl_Billing)[0] as MVO_intl_billing_ind,
+COLLECT_SET(tripplanner)[0] as MVO_tripplanner_ind,
+COLLECT_SET(cruise)[0] as MVO_cruise_ind,
+COLLECT_SET(tp_video)[0] as MVO_tp_video_ind,
+COLLECT_SET(usage)[0] as MVO_usage_ind,
+COLLECT_SET(faq_international)[0] as MVO_faq_international_ind,
+COLLECT_SET(faq_support)[0] as MVO_device_support_ind,
+COLLECT_SET(faq_general)[0] as MVO_faq_general_ind,
+COLLECT_SET(faq_outsideus)[0] as MVO_faq_outsideus_ind,
+COLLECT_SET( tp_page_chat_tp_search)[0] as MVO_tp_page_chat_tp_ind,
+COLLECT_SET(settings)[0] as MVO_settings_ind,
+COLLECT_SET(can_mex)[0] as MVO_can_mex_ind,
+COLLECT_SET(unlimitedplan)[0] as MVO_unlimitedplans_ind,
+COLLECT_SET(tp_enquiry)[0] as MVO_tp_enquiry_ind,
+COLLECT_SET(faq_prepaid)[0] as MVO_faq_prepaid_ind
+from
+(select cust_id,
+mtn,
+case when lower(category_new) ='activate_tp' then session_start_tm end as  activate_tp,
+case when lower(category_new) = 'billing' then session_start_tm end as  intl_Billing,
+case when lower(category_new) = 'tripplanner' then session_start_tm end as  tripplanner,
+case when lower(category_new) = 'cruise' then session_start_tm end as  cruise,
+case when lower(category_new) = 'tp_video' then session_start_tm end as  tp_video,
+case when lower(category_new) = 'page_general-tp_search' then session_start_tm end as  page_general_tp_search,
+case when lower(category_new) = 'usage' then session_start_tm end as  usage,
+case when lower(category_new) = 'faq_international' then session_start_tm end as  faq_international,
+case when lower(category_new) = 'faq_support' then session_start_tm end as  faq_support,
+case when lower(category_new) = 'faq_general' then session_start_tm end as  faq_general,
+case when lower(category_new) = 'faq_outsideus' then session_start_tm end as  faq_outsideus,
+case when lower(category_new) = 'tp_page-chat_tp-search' then session_start_tm end as  tp_page_chat_tp_search,
+case when lower(category_new) = 'settings' then session_start_tm end as settings,
+case when lower(category_new) = 'count_can_mex' then session_start_tm end as can_mex,
+case when lower(category_new) = 'unlimitedplan' then session_start_tm end as unlimitedplan,
+case when lower(category_new) = 'tp_enquiry' then session_start_tm end as tp_enquiry,
+case when lower(category_new) = 'faq_prepaid' then session_start_tm end as faq_prepaid
+
+from VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_SPARK_RT) x
+group by cust_id,mtn""")
+
+    ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_v1.createOrReplaceTempView('ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_v1')
+
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_v1_SPARK_RT SELECT * FROM ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_v1')
+
+
+    ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS=spark.sql("""
+select
+cust_id,
+mtn,
+Last_session_time as mvo_last_session_time,
+case when mvo_activate_tp_ind is not null then 1 else 0 end as mvo_activate_tp_ind,
+case when mvo_intl_billing_ind is not null then 1 else 0 end as mvo_intl_billing_ind,
+case when mvo_tripplanner_ind is not null then 1 else 0 end as mvo_tripplanner_ind,
+case when mvo_cruise_ind is not null then 1 else 0 end as mvo_cruise_ind,
+case when mvo_tp_video_ind is not null then 1 else 0 end as mvo_tp_video_ind,
+case when mvo_usage_ind is not null then 1 else 0 end as mvo_usage_ind,
+case when mvo_faq_international_ind is not null then 1 else 0 end as mvo_faq_international_ind,
+case when mvo_device_support_ind is not null then 1 else 0 end as mvo_device_support_ind,
+case when mvo_faq_general_ind is not null then 1 else 0 end as mvo_faq_general_ind,
+case when mvo_faq_outsideus_ind is not null then 1 else 0 end as mvo_faq_outsideus_ind,
+case when mvo_tp_page_chat_tp_ind is not null then 1 else 0 end as mvo_tp_page_chat_tp_ind,
+case when mvo_settings_ind is not null then 1 else 0 end as mvo_settings_ind,
+case when mvo_can_mex_ind is not null then 1 else 0 end as mvo_can_mex_ind,
+case when mvo_unlimitedplans_ind is not null then 1 else 0 end as mvo_unlimitedplans_ind,
+case when mvo_tp_enquiry_ind is not null then 1 else 0 end as mvo_tp_enquiry_ind,
+case when mvo_faq_prepaid_ind is not null then 1 else 0 end as mvo_faq_prepaid_ind,
+lst_session_activate_tp_ind,
+lst_session_billing_ind,
+lst_session_tripplanner_ind,
+lst_session_cruise_ind,
+lst_session_tp_video_vstd_ind,
+lst_session_usage_ind,
+lst_session_faq_international_ind,
+lst_session_device_support_ind,
+lst_session_faq_general_ind,
+lst_session_faq_outsideus_ind,
+lst_session_tp_page_chat_tp_search_ind,
+lst_session_settings_ind,
+lst_session_can_mex_ind,
+lst_session_unlimitedplan_ind,
+lst_session_tp_enquiry_ind,
+lst_session_faq_prepaid_ind
+from
+(select *,
+case when mvo_activate_tp_ind=Last_session_time then 1 else 0 end as lst_session_activate_tp_ind,
+case when mvo_intl_billing_ind=Last_session_time then 1 else 0 end as lst_session_billing_ind,
+case when mvo_tripplanner_ind=Last_session_time then 1 else 0 end as lst_session_tripplanner_ind,
+case when mvo_cruise_ind=Last_session_time then 1 else 0 end as lst_session_cruise_ind,
+case when mvo_tp_video_ind=Last_session_time then 1 else 0 end as lst_session_tp_video_vstd_ind,
+case when mvo_usage_ind=Last_session_time then 1 else 0 end as lst_session_usage_ind,
+case when mvo_faq_international_ind=Last_session_time then 1 else 0 end as lst_session_faq_international_ind,
+case when mvo_device_support_ind=Last_session_time then 1 else 0 end as lst_session_device_support_ind,
+case when mvo_faq_general_ind=Last_session_time then 1 else 0 end as lst_session_faq_general_ind,
+case when mvo_faq_outsideus_ind=Last_session_time then 1 else 0 end as lst_session_faq_outsideus_ind,
+case when mvo_tp_page_chat_tp_ind=Last_session_time then 1 else 0 end as lst_session_tp_page_chat_tp_search_ind,
+case when mvo_settings_ind=Last_session_time then 1 else 0 end as lst_session_settings_ind,
+case when mvo_can_mex_ind=Last_session_time then 1 else 0 end as lst_session_can_mex_ind,
+case when mvo_unlimitedplans_ind=Last_session_time then 1 else 0 end as lst_session_unlimitedplan_ind,
+case when mvo_tp_enquiry_ind=Last_session_time then 1 else 0 end as lst_session_tp_enquiry_ind,
+case when mvo_faq_prepaid_ind=Last_session_time then 1 else 0 end as lst_session_faq_prepaid_ind
+from (select *,
+greatest(coalesce(mvo_activate_tp_ind,0),coalesce(mvo_intl_billing_ind,0),coalesce(mvo_tripplanner_ind,0),
+coalesce(mvo_cruise_ind,0),coalesce(mvo_tp_video_ind,0),coalesce(mvo_usage_ind,0),coalesce(mvo_faq_international_ind,0),coalesce(mvo_device_support_ind,0),
+coalesce(mvo_faq_general_ind,0),coalesce(mvo_faq_outsideus_ind,0),coalesce(mvo_tp_page_chat_tp_ind,0),
+coalesce(mvo_tp_enquiry_ind,0),coalesce(mvo_settings_ind,0),coalesce(mvo_can_mex_ind,0),coalesce(mvo_unlimitedplans_ind,0),coalesce(mvo_faq_prepaid_ind,0)) as Last_session_time
+from VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_v1_SPARK_RT)z)v""")
+
+    ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS.createOrReplaceTempView('ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS')
+
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_SPARK_RT SELECT * FROM ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS')
+
+
+    ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER =spark.sql("""
+select a.*
+from
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE_SPARK_RT b
+inner join
+(select
+a.cust_id,
+a.mtn,
+a.session_start_date,
+a.session_timestamp,
+a.tp_categories as category_new,
+a.subevent1,
+a.process_dt
+from
+(select *,
+ROW_NUMBER() OVER (PARTITION BY CUST_ID,mtn,tp_categories order by session_timestamp) AS last_ses_vst
+from
+(select * from
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_MFAPP_DESC_BASE_SPARK_RT )T)a
+where last_ses_vst=1)a
+on a.cust_id=b.cust_id
+and a.mtn=b.mtn""")
+
+    ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER.createOrReplaceTempView('ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER')
+
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_SPARK_RT SELECT * FROM ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER')
+
+
+
+    ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1=spark.sql("""
+select x.cust_id,x.mtn,
+    COLLECT_SET(activate_tp)[0] as MVA_activate_tp_ind,
+    COLLECT_SET(intl_Billing)[0] as MVA_intl_billing_ind,
+    COLLECT_SET(cruise)[0] as MVA_cruise_ind,
+    COLLECT_SET(usage)[0] as MVA_usage_ind,
+    COLLECT_SET(faq_support)[0] as MVA_device_support_ind,
+    COLLECT_SET( tp_page_chat_tp_search)[0] as MVA_tp_page_chat_tp_ind,
+    COLLECT_SET(can_mex)[0] as MVA_can_mex_ind,
+    COLLECT_SET(tp_enquiry)[0] as MVA_tp_enquiry_ind,
+    COLLECT_SET(country_researched)[0] as MVA_countries_ind,
+    COLLECT_SET(disable_tp)[0] as MVA_disable_tp_ind,
+    COLLECT_SET(devices)[0] as MVA_devices_ind
+from
+(select cust_id,
+    mtn,
+    case when lower(category_new) ='activate' then session_timestamp end as  activate_tp,
+    case when lower(category_new) = 'billing' then session_timestamp end as  intl_Billing,
+    case when lower(category_new) = 'cruise' then session_timestamp end as  cruise,
+    case when lower(category_new) = 'usage' then session_timestamp end as  usage,
+    case when lower(category_new) = 'support' then session_timestamp end as  faq_support,
+    case when lower(category_new) = 'tp_page-chat_tp' then session_timestamp end as  tp_page_chat_tp_search,
+    case when lower(category_new) = 'can_mex' then session_timestamp end as can_mex,
+    case when lower(category_new) = 'tp_enquiry' then session_timestamp end as tp_enquiry,
+    case when lower(category_new) = 'countries' then session_timestamp end as country_researched,
+    case when lower(category_new) = 'disable_tp' then session_timestamp end as disable_tp,
+    case when lower(category_new) = 'devices' then session_timestamp end as devices
+from VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_SPARK_RT )x
+group by cust_id,mtn""")
+
+
+    ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1.createOrReplaceTempView('ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1')
+
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1_SPARK_RT SELECT * FROM ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1')
+
+
+
+
+    ITP_SAD_DLY_MFAPP_CALL_TVL_INDICATORS=spark.sql("""
+select
+cust_id,
+mtn,
+Last_session_time as mva_last_pg_vst_time,
+case when mva_activate_tp_ind is not null then 1 else 0 end as mva_activate_tp_ind,
+case when mva_intl_billing_ind is not null then 1 else 0 end as mva_intl_billing_ind,
+case when mva_cruise_ind is not null then 1 else 0 end as mva_cruise_ind,
+case when mva_usage_ind is not null then 1 else 0 end as mva_usage_ind,
+case when mva_device_support_ind is not null then 1 else 0 end as mva_device_support_ind,
+case when mva_tp_page_chat_tp_ind is not null then 1 else 0 end as mva_tp_page_chat_tp_ind,
+case when mva_can_mex_ind is not null then 1 else 0 end as mva_can_mex_ind,
+case when mva_tp_enquiry_ind is not null then 1 else 0 end as mva_tp_enquiry_ind,
+case when mva_countries_ind is not null then 1 else 0 end as mva_countries_ind,
+case when mva_disable_tp_ind is not null then 1 else 0 end as mva_disable_tp_ind,
+case when mva_devices_ind is not null then 1 else 0 end as mva_devices_ind,
+lst_session_mfapp_activate_tp_ind,
+lst_session_mfapp_billing_ind,
+lst_session_mfapp_cruise_ind,
+lst_session_mfapp_usage_ind,
+lst_session_mfapp_support_ind,
+lst_session_mfapp_tp_page_chat_tp_ind,
+lst_session_mfapp_can_mex_ind,
+lst_session_mfapp_tp_enquiry_ind,
+lst_session_mfapp_countries_ind,
+lst_session_mfapp_disable_tp_ind,
+lst_session_mfapp_devices_ind
+from
+(select *,
+case when mva_activate_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_activate_tp_ind,
+case when mva_intl_billing_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_billing_ind,
+case when mva_cruise_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_cruise_ind,
+case when mva_usage_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_usage_ind,
+case when mva_device_support_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_support_ind ,
+case when mva_tp_page_chat_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_tp_page_chat_tp_ind,
+case when mva_can_mex_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_can_mex_ind,
+case when mva_tp_enquiry_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_tp_enquiry_ind,
+case when mva_countries_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_countries_ind,
+case when mva_disable_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_disable_tp_ind,
+case when mva_devices_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_devices_ind
+from
+(select *,
+greatest(coalesce(mva_activate_tp_ind,0),coalesce(mva_intl_billing_ind,0),coalesce(mva_cruise_ind,0),
+coalesce(mva_usage_ind,0),coalesce(mva_device_support_ind,0),coalesce(mva_tp_page_chat_tp_ind,0),coalesce(mva_can_mex_ind,0),coalesce(mva_tp_enquiry_ind,0),
+coalesce(mva_countries_ind,0),coalesce(mva_disable_tp_ind,0),coalesce(mva_devices_ind,0)) as Last_session_time
+from VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1_SPARK_RT)z)v""")
+
+    ITP_SAD_DLY_MFAPP_CALL_TVL_INDICATORS.createOrReplaceTempView('ITP_SAD_DLY_MFAPP_CALL_TVL_INDICATORS')
+
+    spark.sql('INSERT OVERWRITE TABLE ITP_SAD_DLY_MFAPP_CALL_TVL_INDICATORS_SPARK_RT SELECT * FROM ITP_SAD_DLY_MFAPP_CALL_TVL_INDICATORS')
+    spark.sql("SET hive.merge.sparkfiles = true")
+    spark.sql("SET hive.merge.mapredfiles = true")
+    spark.sql("SET hive.merge.mapfiles = true")
+    spark.sql("set hive.merge.smallfiles.avgsize = 134217728")
+    spark.sql("set hive.merge.size.per.task = 134217728")
+
+
+    finaldf=spark.sql("""
+SELECT DISTINCT
+A.CUST_ID,
+A.ACCT_NUM ,
+A.MTN ,
+A.CUST_LINE_SEQ_ID,
+A.ETHNICITY,
+A.AGE,
+A.CUST_ESTB_DT ,
+A.PPLAN_EFF_DT ,
+A.LINE_ACT_DT ,
+A.MTN_ACT_DT ,
+A.LINE_TERM_DT ,
+A.CNTRCT_TERM_DT,
+A.BIRTH_YEAR ,
+A.PPLAN_CD ,
+A.PPLAN_TYPE_CD ,
+A.PPLAN_DESC ,
+A.ACCESS_AMT ,
+A.DATA_ACCESS_AMT ,
+A.ANLG_DGTL_IND ,
+A.CNTRCT_TERM_IND ,
+A.PREPAID_IND ,
+A.PPLAN_BNDL_TYPE_CD ,
+A.BI_PPLAN_DESC ,
+A.BI_PPLAN_DESC_ABBRV ,
+A.BI_PPLAN_SERVICE_TYPE_DESC ,
+A.BI_PPLAN_TYPE_DESC ,
+A.BI_PPLAN_CTGRY_DESC ,
+A.BI_DATA_ALLOW_TIER_VALUE ,
+A.BI_DATA_ALLOW_TIER_UNIT_MEAS ,
+A.BI_RPT_PPLAN_DESC ,
+A.MSG_ALLOW_SHARE_IND,
+A.DATA_ALLOW_SHARE_IND ,
+A.VOICE_ALLOW_SHARE_IND ,
+A.ACTIVITY_CD ,
+A.svc_prod_id1 ,
+A.svc_prod_desc1 ,
+A.SVC_PROD_ID2 ,
+A.SVC_PROD_DESC2 ,
+A.SVC_PROD_ID3 ,
+A.SVC_PROD_DESC3 ,
+A.mtrans_ts1,
+A.mtrans_ts2,
+A.mtrans_ts3,
+A.TP_TYPE1,
+A.TP_TYPE2,
+A.TP_TYPE3,
+A.svc_prod_chrg_amt1 ,
+A.svc_prod_treat_cd1 ,
+A.max_svc_prod_eff_dt1,
+A.FREE_PLAN,
+A.line_type,
+A.age_group,
+A.prod_nm,
+A.device_prod_nm,
+A.device_type_cd,
+A.device_brand_nm,
+A.DEVICE_TYPE,
+A.device_compat,
+A.byod_flag,
+A.vz_device,
+A.tvl_pass_included,
+A.can_mex_free_plan,
+A.region_desc,
+A.adults_in_hshld,
+A.marital_status,
+A.child_in_hshld,
+A.gender_input,
+A.presence_young_adult,
+A.presence_sr_adult,
+A.internet_user_ind,
+A.hshld_size,
+A.religious_desc,
+A.bill_cycle_dt,
+A.pymnt_due_dt,
+A.feat_amt,
+A.prev_due_amt,
+A.pymnt_recvd_amt,
+A.pymnt_revrs_amt,
+A.bill_bal_amt,
+A.late_pymnt_chrg_amt,
+A.occ_amt,
+A.bill_curr_amt,
+A.bill_tot_amt,
+A.bill_30_day_amt,
+A.bill_90_day_amt,
+A.bill_180_day_amt,
+A.bill_cycle_ind,
+A.bill_6_mth_avg,
+A.occ_cdv,
+A.occ_amtv,
+A.occ_type_cdv,
+A.occ_desc_ref,
+a.occ_reasons,
+A.trans_dt,
+A.agg_occ_value,
+A.cyc_mth_yr,
+A.prev_bill_cycle_dt,
+A.prev_pymnt_due_dt ,
+A.prev_feat_amt ,
+A.prev_prev_due_amt ,
+A.prev_pymnt_recvd_amt ,
+A.prev_pymnt_revrs_amt ,
+A.prev_bill_bal_amt ,
+A.prev_late_pymnt_chrg_amt ,
+A.prev_occ_amt ,
+A.prev_bill_curr_amt ,
+A.prev_bill_tot_amt ,
+A.prev_bill_30_day_amt ,
+A.prev_bill_90_day_amt ,
+A.prev_bill_180_day_amt ,
+A.prev_bill_cycle_ind ,
+A.prev_bill_6_mth_avg ,
+A.prev_occ_cdv ,
+A.prev_occ_amtv ,
+A.prev_occ_type_cdv ,
+A.prev_occ_desc ,
+A.prev_trans_dt ,
+A.prev_agg_occ_value ,
+A.prev_cyc_mth_yr ,
+A.total_data_allow,
+A.plan_data_allow,
+A.bonus_data_allow,
+A.sls_outlet_id,
+A.tenure,
+A.true_plan_data_allow,
+A.true_bonus_data_allow,
+A.gift_data_allow,
+A.true_total_data_allow,
+A.over_used,
+A.avgg,
+A.thsld,
+A.data_threshold,
+A.TVL1 ,
+A.TVL2 ,
+A.TVL3 ,
+A.TVL4,
+A.TVL5,
+A.TVL6 ,
+A.TVL7 ,
+A.TVL8 ,
+A.TVL9,
+A.TVL10,
+A.CCD1,
+A.CCD2,
+A.CCD3,
+A.CCD4,
+A.CCD5 ,
+A.CCD6,
+A.CCD7,
+A.CCD8,
+A.CCD9,
+A.CCD10 ,
+A.CALL_TS1,
+A.CALL_TS2 ,
+A. CALL_TS3,
+A.CALL_TS4 ,
+A.CALL_TS5,
+A.CALL_TS6,
+A.CALL_TS7,
+A. CALL_TS8,
+A.CALL_TS9,
+A.CALL_TS10 ,
+A.IVR_CALL_ID1,
+A.IVR_CALL_ID2,
+A.IVR_CALL_ID3,
+A.IVR_CALL_ID4,
+A.IVR_CALL_ID5,
+A.IVR_CALL_ID6,
+A.IVR_CALL_ID7,
+A.IVR_CALL_ID8,
+A.IVR_CALL_ID9,
+A.IVR_CALL_ID10,
+A.COUNTRY_CD_COMBO,
+A.PREV_TVL_COUNT,
+A.PREV_CALL_COUNT,
+A.MSG_DATE,
+A.MSG_TIMESTAMP,
+A.TOPIC,
+A.ALERT_TYPE
+,A.Primary1_topic
+,A.secondary1_topic
+,A.Primary2_topic
+,A.secondary2_topic
+,A.Primary3_topic
+,A.secondary3_topic
+,A.Primary4_topic
+,A.secondary4_topic
+,A.Primary5_topic
+,A.secondary5_topic
+,A.Primary6_topic
+,A.secondary6_topic
+,A.Primary7_topic
+,A.secondary7_topic
+,A.Primary8_topic
+,A.secondary8_topic
+,A.Primary9_topic
+,A.secondary9_topic
+,A.Primary10_topic
+,A.secondary10_topic,
+C.mvo_activate_tp_ind ,
+C.mvo_intl_billing_ind ,
+C.mvo_tripplanner_ind ,
+C.mvo_cruise_ind ,
+C.mvo_tp_video_ind ,
+C.mvo_usage_ind ,
+C.mvo_faq_international_ind ,
+C.mvo_device_support_ind ,
+C.mvo_faq_general_ind ,
+C.mvo_faq_outsideus_ind ,
+C.mvo_tp_page_chat_tp_ind ,
+C.mvo_settings_ind ,
+C.mvo_can_mex_ind ,
+C.mvo_unlimitedplans_ind ,
+C.mvo_tp_enquiry_ind ,
+C.mvo_last_session_time ,
+C.lst_session_activate_tp_ind
+,C.lst_session_billing_ind
+,C.lst_session_tripplanner_ind
+,C.lst_session_cruise_ind
+,C.lst_session_tp_video_vstd_ind
+,C.lst_session_usage_ind
+,C.lst_session_faq_international_ind
+,C.lst_session_device_support_ind
+,C.lst_session_faq_general_ind
+,C.lst_session_faq_outsideus_ind
+,C.lst_session_tp_page_chat_tp_search_ind
+,C.lst_session_settings_ind
+,C.lst_session_can_mex_ind
+,C.lst_session_unlimitedplan_ind
+,C.lst_session_tp_enquiry_ind
+,C.lst_session_faq_prepaid_ind
+,D.lst_session_mfapp_activate_tp_ind
+,D.lst_session_mfapp_billing_ind
+,D.lst_session_mfapp_cruise_ind
+,D.lst_session_mfapp_usage_ind
+,D.lst_session_mfapp_support_ind
+,D.lst_session_mfapp_tp_page_chat_tp_ind
+,D.lst_session_mfapp_can_mex_ind
+,D.lst_session_mfapp_tp_enquiry_ind
+,D.lst_session_mfapp_countries_ind
+,D.lst_session_mfapp_disable_tp_ind
+,D.lst_session_mfapp_devices_ind
+,D.mva_activate_tp_ind ,
+D.mva_intl_billing_ind ,
+D.mva_cruise_ind ,
+D.mva_usage_ind ,
+D.mva_device_support_ind ,
+D.mva_tp_page_chat_tp_ind ,
+D.mva_can_mex_ind ,
+D.mva_tp_enquiry_ind ,
+D.mva_countries_ind ,
+D.mva_disable_tp_ind ,
+D.mva_devices_ind ,
+D.mva_last_pg_vst_time as mva_last_session_time,
+current_date() as process_dt
+FROM (select DISTINCT * from VZW_SOI_PRD_TBLS.ITP_INTER_DLY_called_FINAL_SPARK_RT)  AS A
+LEFT OUTER JOIN
+(SELECT DISTINCT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_SPARK_RT) AS C
+ON A.CUST_ID=C.CUST_ID
+AND A.MTN=C.MTN
+LEFT OUTER JOIN
+(SELECT DISTINCT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_DLY_MFAPP_CALL_TVL_INDICATORS_SPARK_RT) AS D
+ON A.CUST_ID=D.CUST_ID
+AND A.MTN=D.MTN""").coalesce(10)
+
+    finaldf.createOrReplaceTempView('finaldf')
+    spark.sql('INSERT INTO VZW_SOI_PRD_TBLS.vzsoi_intl_dly_scoring_batch_rtm_tbl_auto partition (process_dt) SELECT * from finaldf')
+
+
+
+    print('Program completed')
+
+
+    spark.stop()

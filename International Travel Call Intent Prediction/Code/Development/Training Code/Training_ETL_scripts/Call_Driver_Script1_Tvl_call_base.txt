@@ -1,0 +1,254 @@
+
+#-----------------------------------------------------------Query-1------------------------------------------------------------------------------------#
+
+This table forms the base for the international calls as we are filtering them on (%intl%). The table which we are referring to (VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_CUST_CALL_HIST) from the semantic layer logs multiple rows per mtn as call reasons.  
+We need to create a call sequence based on the row partitioning of ivr_id and call_start_dt wih cust_id,acct_num and mtn to capture one single row per mtn to aviod duplication.
+
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_CUST_CALL_BASE
+create table VZW_SOI_PRD_TBLS.ITP_SAD_CUST_CALL_BASE 
+as 
+select a.* from (
+select a.*,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.ivr_call_id,a.call_start_dt ORDER BY a.call_start_tm,a.call_end_tm DESC) AS call_seq
+from 
+(SELECT
+DISTINCT CUST_ID
+,acct_num
+,cust_line_seq_id
+,mtn
+,ivr_call_id
+,call_start_dt
+,call_start_tm
+,call_end_tm
+,CONCAT(call_start_dt,' ',SUBSTR(call_start_tm,12,8)) AS call_start_tm_stmp
+FROM  VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_CUST_CALL_HIST
+where 
+CTGRY_DRIVER LIKE '%INTL%')a) as a
+where a.call_seq =1
+
+#-------------------------------------------------------------Query2--------------------------------------------------------------------------------#
+In this table we are trying to capture the population who made international calls and also received one message. (Basically the ones who travelled outside the country.) We are putting a filter of (REQUEST_DT>'2019-02-19') in the VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_WSMS_DITP_USAGE table so that the min call dates and min travel dates from both table are from same start time period. Also we are creating a sequence columns (tvl_seq) in this table for the travel dates to catpture the latest 10 travels of the customer prior to the call. This is ensured by creating a row_number partition on  ivr_call_id and call_start_tm_stmp. condition(TVL_TS<=a.call_start_tm_stmp) ensures the call time should be after the travel dates. 
+
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_TVL_CALL_INT1 ;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_TVL_CALL_INT1  as 
+select z.* from 
+(select
+distinct
+a.cust_id,
+a.mtn,
+a.acct_num,
+a.ivr_call_id,
+a.call_start_dt,
+a.call_start_tm_stmp,
+b.COUNTRY_CD,
+b.SMS_REQ_DT,
+b.TVL_TS,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.ivr_call_id,a.call_start_tm_stmp ORDER BY  b.TVL_TS DESC) AS tvl_SEQ 
+from 
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_CALL_BASE as a
+left outer join
+(SELECT 
+regexp_replace(cust_id,'-','') cust_id,
+ACCT_NUM, 
+MTN, 
+COUNTRY_CD, 
+REQUEST_DT AS SMS_REQ_DT, 
+REQUEST_TS AS SMS_REQ_TS, 
+CAST(CONCAT(REQUEST_DT,' ',SUBSTR(REQUEST_TS,12,8)) AS STRING) AS TVL_TS  
+FROM VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_WSMS_DITP_USAGE where REQUEST_DT>'2019-02-19') as B
+on trim(a.cust_id)=trim(b.cust_id)
+and trim(a.mtn)=trim(b.mtn)
+where b.TVL_TS<=a.call_start_tm_stmp)z
+where country_cd is not null
+
+---putting the filter to make sure the min call dates and min travel dates from both table are from same start
+time period
+
+#-----------------------------------------------------------------Query-3---------------------------------------------------------------------------------#
+
+This table is a continuation of the previous table.  We are  using the travel sequence which we have created in the previous table and transposing them into columns to capture the latest 10 travels of the customer before the call.
+The condition(B.call_start_tm_stmp<A.call_start_tm_stmp and b.ivr_call_id<>a.ivr_call_id) ensures the call happens before the reference call_start_tm.
+
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_CALL_TVL_SEQ ;
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_CALL_TVL_SEQ
+AS 
+SELECT 
+CUST_ID, 
+ACCT_NUM, 
+MTN, 
+ivr_call_id,
+MAX(call_start_tm_stmp) AS call_start_tm_stmp,
+MAX(tvl_SEQ)  AS PREV_TVL_COUNT,
+MAX(CASE WHEN TVL_SEQ = 1 THEN TVL_TS END) AS TVL1, 
+MAX(CASE WHEN TVL_SEQ= 2 THEN TVL_TS END) AS TVL2, 
+MAX(CASE WHEN TVL_SEQ = 3 THEN TVL_TS END) AS TVL3, 
+MAX(CASE WHEN TVL_SEQ= 4 THEN TVL_TS END) AS TVL4, 
+MAX(CASE WHEN  TVL_SEQ = 5 THEN TVL_TS END) AS TVL5, 
+MAX(CASE WHEN  TVL_SEQ = 6 THEN TVL_TS END) AS TVL6, 
+MAX(CASE WHEN  TVL_SEQ = 7 THEN TVL_TS END) AS TVL7, 
+MAX(CASE WHEN  TVL_SEQ = 8 THEN TVL_TS END) AS TVL8, 
+MAX(CASE WHEN  TVL_SEQ = 9 THEN TVL_TS END) AS TVL9, 
+MAX(CASE WHEN  TVL_SEQ = 10 THEN TVL_TS END) AS TVL10, 
+MAX(CASE WHEN TVL_SEQ = 1 THEN COUNTRY_CD  END) AS CCD1, 
+MAX(CASE WHEN TVL_SEQ= 2 THEN  COUNTRY_CD END) AS CCD2, 
+MAX(CASE WHEN TVL_SEQ = 3 THEN COUNTRY_CD  END) AS CCD3, 
+MAX(CASE WHEN TVL_SEQ= 4 THEN COUNTRY_CD END) AS CCD4, 
+MAX(CASE WHEN  TVL_SEQ = 5 THEN COUNTRY_CD END) AS CCD5, 
+MAX(CASE WHEN  TVL_SEQ = 6 THEN COUNTRY_CD END) AS CCD6, 
+MAX(CASE WHEN  TVL_SEQ = 7 THEN COUNTRY_CD END) AS CCD7, 
+MAX(CASE WHEN  TVL_SEQ = 8 THEN COUNTRY_CD END) AS CCD8, 
+MAX(CASE WHEN  TVL_SEQ = 9 THEN COUNTRY_CD END) AS CCD9, 
+MAX(CASE WHEN  TVL_SEQ = 10 THEN COUNTRY_CD END) AS CCD10 
+FROM 
+VZW_SOI_PRD_TBLS.ITP_SAD_TVL_CALL_INT1
+WHERE TRIM(CUST_ID) IS NOT NULL
+AND TRIM(MTN) IS NOT NULL
+GROUP BY CUST_ID,MTN,ACCT_NUM,ivr_call_id 
+
+#----------------------------------------------------------------------Query-4----------------------------------------------------------------------#
+
+In this table we are using the base which we have created for the international calls to capture the last 10 international calls made by the customer keeping the latest call_start_tm_stmp as a reference (i.e. all the calls made by the customer before the reference call and then sequence them from 1 to 10)
+The where condition (B.call_start_tm_stmp<A.call_start_tm_stmp and b.ivr_call_id<>a.ivr_call_id ) ensures that latest 10 calls are before the reference call(call_start_tm_stmp).
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1
+as 
+select
+distinct
+a.cust_id,
+a.mtn,
+a.acct_num,
+a.ivr_call_id,
+a.call_start_dt,
+a.call_start_tm_stmp,
+B.ivr_call_id AS IVR_ID,
+B.call_start_dt AS CALL_DT,
+B.call_start_tm_stmp AS CALL_TMSTMP,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.ivr_call_id ORDER BY B.call_start_tm_stmp DESC) AS CALL_SEQ 
+from VZW_SOI_PRD_TBLS.ITP_SAD_CUST_CALL_BASE as a
+INNER  JOIN 
+(SELECT * FROM VZW_SOI_PRD_TBLS.ITP_SAD_CUST_CALL_BASE) as B
+ON 
+a.cust_id=b.cust_id
+and a.acct_num=b.acct_num
+and a.mtn=b.mtn
+WHERE B.call_start_tm_stmp<A.call_start_tm_stmp
+and b.ivr_call_id<>a.ivr_call_id
+   
+
+#-------------------------------------------------------------Query-5-----------------------------------------------------------------------#
+This table is a continuation of the previous table. Here we are using the sequence which we have created in the previous table and transposing the 10 calls in the columns.
+
+DROP TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_SEQ;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_SEQ 
+AS 
+SELECT 
+CUST_ID, 
+ACCT_NUM, 
+MTN, 
+ivr_call_id,
+MAX(call_start_tm_stmp) AS call_start_tm_stmp,
+COUNT(DISTINCT IVR_ID) AS PREV_CALL_COUNT,
+MAX(CASE WHEN CALL_SEQ = 1 THEN CALL_TMSTMP END) AS CALL_TS1, 
+MAX(CASE WHEN CALL_SEQ= 2 THEN CALL_TMSTMP END) AS CALL_TS2, 
+MAX(CASE WHEN CALL_SEQ = 3 THEN CALL_TMSTMP END) AS CALL_TS3, 
+MAX(CASE WHEN CALL_SEQ= 4 THEN CALL_TMSTMP END) AS CALL_TS4, 
+MAX(CASE WHEN  CALL_SEQ = 5 THEN CALL_TMSTMP END) AS CALL_TS5, 
+MAX(CASE WHEN  CALL_SEQ = 6 THEN CALL_TMSTMP END) AS CALL_TS6, 
+MAX(CASE WHEN  CALL_SEQ = 7 THEN CALL_TMSTMP END) AS CALL_TS7, 
+MAX(CASE WHEN  CALL_SEQ = 8 THEN CALL_TMSTMP END) AS CALL_TS8, 
+MAX(CASE WHEN  CALL_SEQ = 9 THEN CALL_TMSTMP END) AS CALL_TS9, 
+MAX(CASE WHEN  CALL_SEQ = 10 THEN CALL_TMSTMP END) AS CALL_TS10, 
+MAX(CASE WHEN CALL_SEQ = 1 THEN IVR_ID  END) AS IVR_CALL_ID1, 
+MAX(CASE WHEN CALL_SEQ= 2 THEN  IVR_ID END) AS IVR_CALL_ID2, 
+MAX(CASE WHEN CALL_SEQ = 3 THEN IVR_ID  END) AS IVR_CALL_ID3, 
+MAX(CASE WHEN CALL_SEQ= 4 THEN IVR_ID END) AS IVR_CALL_ID4, 
+MAX(CASE WHEN  CALL_SEQ = 5 THEN IVR_ID END) AS IVR_CALL_ID5, 
+MAX(CASE WHEN  CALL_SEQ = 6 THEN IVR_ID END) AS IVR_CALL_ID6, 
+MAX(CASE WHEN  CALL_SEQ = 7 THEN IVR_ID END) AS IVR_CALL_ID7, 
+MAX(CASE WHEN  CALL_SEQ = 8 THEN IVR_ID END) AS IVR_CALL_ID8, 
+MAX(CASE WHEN  CALL_SEQ = 9 THEN IVR_ID END) AS IVR_CALL_ID9, 
+MAX(CASE WHEN  CALL_SEQ = 10 THEN IVR_ID END) AS IVR_CALL_ID10
+FROM 
+VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1
+GROUP BY CUST_ID,MTN,ACCT_NUM,ivr_call_id
+
+#----------------------------------------------------------------Query-6----------------------------------------------------------------#
+
+# This is our final training base. The tables which will be created at a later stage will imposed on this base. In the current table this base has the total international calls along with the latest 10 travels and 10 calls made by the customer.
+
+
+DROP TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_TRVL_SEQ_FINAL;
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_TRVL_SEQ_FINAL
+AS 
+SELECT DISTINCT 
+A1.CUST_ID, 
+A1.ACCT_NUM, 
+A1.MTN, 
+A1.IVR_CALL_ID,
+A1.CALL_START_TM_STMP,
+CASE WHEN A.PREV_TVL_COUNT IS NULL THEN 0
+ELSE A.PREV_TVL_COUNT
+END AS PREV_TVL_COUNT,
+CASE WHEN B.PREV_CALL_COUNT IS NULL THEN 0
+ELSE B.PREV_CALL_COUNT
+END AS PREV_CALL_COUNT,
+B.IVR_CALL_ID1, 
+B.IVR_CALL_ID2, 
+B.IVR_CALL_ID3, 
+B.IVR_CALL_ID4, 
+B.IVR_CALL_ID5, 
+B.IVR_CALL_ID6, 
+B.IVR_CALL_ID7, 
+B.IVR_CALL_ID8, 
+B.IVR_CALL_ID9, 
+B.IVR_CALL_ID10,
+B.CALL_TS1, 
+B.CALL_TS2, 
+B.CALL_TS3, 
+B.CALL_TS4, 
+B.CALL_TS5, 
+B.CALL_TS6, 
+B.CALL_TS7, 
+B.CALL_TS8, 
+B.CALL_TS9, 
+B.CALL_TS10, 
+A.TVL1, 
+A.TVL2, 
+A.TVL3, 
+A.TVL4, 
+A.TVL5, 
+A.TVL6, 
+A.TVL7, 
+A.TVL8, 
+A.TVL9, 
+A.TVL10, 
+A.CCD1, 
+A.CCD2, 
+A.CCD3, 
+A.CCD4, 
+A.CCD5, 
+A.CCD6, 
+A.CCD7, 
+A.CCD8, 
+A.CCD9, 
+A.CCD10 
+FROM 
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_CALL_BASE as A1
+LEFT OUTER JOIN 
+VZW_SOI_PRD_TBLS.ITP_SAD_CALL_TVL_SEQ AS A
+ON A1.CUST_ID=A.CUST_ID
+AND A1.MTN=A.MTN
+AND A1.ACCT_NUM=A.ACCT_NUM
+AND A1.ivr_call_id=A.ivr_call_id
+and A1.call_start_tm_stmp=A.call_start_tm_stmp
+LEFT OUTER JOIN 
+VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_SEQ AS B
+ON A1.CUST_ID=B.CUST_ID
+AND A1.MTN=B.MTN
+AND A1.ACCT_NUM=B.ACCT_NUM
+AND A1.ivr_call_id=B.ivr_call_id
+and A1.call_start_tm_stmp=b.call_start_tm_stmp;

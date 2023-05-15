@@ -1,0 +1,161 @@
+#These tables aim at creating the topics corresponding to the calls which we have created in the previous table. There are 10 different tables created to   capture 10 topics as per the sequence which we have developed earlier. The table vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 has all the topic information   related to international calls. 
+#----------------------------------------------------------------------------------------------------------------------------------------------------------#
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS;
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary_topic,
+B.SECONDARY_TOPIC as secondary_topic 
+FROM  
+(SELECT A.IVR_CALL_ID FROM
+(SELECT A.* ,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.ivr_call_id ORDER BY  call_start_tm_stmp DESC) AS CALL_SEQ 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_TRVL_SEQ_FINAL AS A)
+AS A WHERE CALL_SEQ=1
+) as a
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+on trim(A.IVR_call_id)=trim(B.IVR_ID);
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS1;
+ 
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS1
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary1_topic,
+B.SECONDARY_TOPIC as secondary1_topic 
+FROM  
+VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+ON trim(A.IVR_call_id)=trim(B.IVR_ID)
+WHERE A.CALL_SEQ=1;
+
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS2;
+ 
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS2
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary2_topic,
+B.SECONDARY_TOPIC as secondary2_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+ON trim(A.IVR_call_id) = trim(B.IVR_ID)
+WHERE A.CALL_SEQ=2;
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS3;
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS3
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary3_topic,
+B.SECONDARY_TOPIC as secondary3_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+ON trim(A.IVR_call_id) =trim(B.IVR_ID)
+WHERE A.CALL_SEQ=3;
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS4;
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS4
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary4_topic,
+B.SECONDARY_TOPIC as secondary4_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+ON trim(A.IVR_call_id) = trim(B.IVR_ID)
+WHERE A.CALL_SEQ=4;
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS5;
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS5
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary5_topic,
+B.SECONDARY_TOPIC as secondary5_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+ON trim(A.IVR_call_id) = trim(B.IVR_ID)
+WHERE A.CALL_SEQ=5;
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS6;
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS6
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary6_topic,
+B.SECONDARY_TOPIC as secondary6_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+ON trim(A.IVR_call_id) = trim(B.IVR_ID)
+WHERE A.CALL_SEQ=6;
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS7;
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS7
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary7_topic,
+B.SECONDARY_TOPIC as secondary7_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+ON trim(A.IVR_call_id) = trim(B.IVR_ID)
+WHERE A.CALL_SEQ=7;
+
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS8;
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS8
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary8_topic,
+B.SECONDARY_TOPIC as secondary8_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+ON trim(A.IVR_call_id) = trim(B.IVR_ID)
+WHERE A.CALL_SEQ=8;
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS9;
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS9
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary9_topic,
+B.SECONDARY_TOPIC as secondary9_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+ON trim(A.IVR_call_id) = trim(B.IVR_ID) 
+WHERE A.CALL_SEQ=9;
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS10;
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_CALL_TVL_TOPICS10
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary10_topic,
+B.SECONDARY_TOPIC as secondary10_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_INT1 as  A
+inner join 
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+ON trim(A.IVR_call_id) = trim(B.IVR_ID) 
+WHERE A.CALL_SEQ=10;

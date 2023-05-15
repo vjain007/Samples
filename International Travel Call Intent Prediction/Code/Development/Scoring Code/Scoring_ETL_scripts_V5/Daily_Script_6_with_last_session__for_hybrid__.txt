@@ -1,0 +1,118 @@
+MFAPP - mobile app visits of customer
+#----------------------------------------------------------------query-1------------------------------------------------------------------#
+drop  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER 
+as 
+select a.*
+from 
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE b
+inner join 
+(select
+a.cust_id,
+a.mtn,
+a.session_start_date,
+a.session_timestamp,
+a.tp_categories as category_new,
+a.subevent1,
+a.process_dt
+from 
+(select *,
+ROW_NUMBER() OVER (PARTITION BY CUST_ID,mtn,tp_categories order by session_timestamp) AS last_ses_vst
+from 
+(select * from 
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_MFAPP_DESC_BASE )T)a
+where last_ses_vst=1)a
+on a.cust_id=b.cust_id
+and a.mtn=b.mtn
+
+COMMENTS: this query orders the intl visits (in past 7 days) of the customer in our base in sequence and selects every unique visit category pg in sequence if their were multipile pages visited
+for example if customer visited  pg1 pg4 pg2 pg1 pg3 pg4, this query gives pg1 pg4 pg2 pg3 
+
+#---------------------------------------------------------------query-2--------------------------------------------------------------------#
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1
+as 
+select x.cust_id,x.mtn,
+    COLLECT_SET(activate_tp)[0] as MVA_activate_tp_ind,
+    COLLECT_SET(intl_Billing)[0] as MVA_intl_billing_ind,
+    COLLECT_SET(cruise)[0] as MVA_cruise_ind,
+    COLLECT_SET(usage)[0] as MVA_usage_ind,
+    COLLECT_SET(faq_support)[0] as MVA_device_support_ind,
+    COLLECT_SET( tp_page_chat_tp_search)[0] as MVA_tp_page_chat_tp_ind,
+    COLLECT_SET(can_mex)[0] as MVA_can_mex_ind,
+    COLLECT_SET(tp_enquiry)[0] as MVA_tp_enquiry_ind,
+    COLLECT_SET(country_researched)[0] as MVA_countries_ind,
+    COLLECT_SET(disable_tp)[0] as MVA_disable_tp_ind,
+    COLLECT_SET(devices)[0] as MVA_devices_ind
+from
+(select cust_id,
+    mtn,
+    case when lower(category_new) ='activate' then session_timestamp end as  activate_tp,
+    case when lower(category_new) = 'billing' then session_timestamp end as  intl_Billing,
+    case when lower(category_new) = 'cruise' then session_timestamp end as  cruise,
+    case when lower(category_new) = 'usage' then session_timestamp end as  usage,
+    case when lower(category_new) = 'support' then session_timestamp end as  faq_support,
+    case when lower(category_new) = 'tp_page-chat_tp' then session_timestamp end as  tp_page_chat_tp_search,
+    case when lower(category_new) = 'can_mex' then session_timestamp end as can_mex,
+    case when lower(category_new) = 'tp_enquiry' then session_timestamp end as tp_enquiry,
+    case when lower(category_new) = 'countries' then session_timestamp end as country_researched,
+    case when lower(category_new) = 'disable_tp' then session_timestamp end as disable_tp,
+    case when lower(category_new) = 'devices' then session_timestamp end as devices
+from VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER )x
+group by cust_id,mtn
+
+
+COMMENTS: this query pivots the sequence of pg visits into a row for each customer and assigns the page visit time to whichever pg was visited otherwise null
+
+#-------------------------------------------------------------------query-3----------------------------------------------------#
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_MFAPP_CALL_TVL_INDICATORS;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_MFAPP_CALL_TVL_INDICATORS as 
+select 
+cust_id,
+mtn,
+Last_session_time as mva_last_pg_vst_time,
+case when mva_activate_tp_ind is not null then 1 else 0 end as mva_activate_tp_ind,
+case when mva_intl_billing_ind is not null then 1 else 0 end as mva_intl_billing_ind,
+case when mva_cruise_ind is not null then 1 else 0 end as mva_cruise_ind,
+case when mva_usage_ind is not null then 1 else 0 end as mva_usage_ind,
+case when mva_device_support_ind is not null then 1 else 0 end as mva_device_support_ind,
+case when mva_tp_page_chat_tp_ind is not null then 1 else 0 end as mva_tp_page_chat_tp_ind,
+case when mva_can_mex_ind is not null then 1 else 0 end as mva_can_mex_ind,
+case when mva_tp_enquiry_ind is not null then 1 else 0 end as mva_tp_enquiry_ind,
+case when mva_countries_ind is not null then 1 else 0 end as mva_countries_ind,
+case when mva_disable_tp_ind is not null then 1 else 0 end as mva_disable_tp_ind,
+case when mva_devices_ind is not null then 1 else 0 end as mva_devices_ind,
+lst_session_mfapp_activate_tp_ind,
+lst_session_mfapp_billing_ind,
+lst_session_mfapp_cruise_ind,
+lst_session_mfapp_usage_ind,
+lst_session_mfapp_support_ind,
+lst_session_mfapp_tp_page_chat_tp_ind,
+lst_session_mfapp_can_mex_ind,
+lst_session_mfapp_tp_enquiry_ind,
+lst_session_mfapp_countries_ind,
+lst_session_mfapp_disable_tp_ind,
+lst_session_mfapp_devices_ind
+from 
+(select *,
+case when mva_activate_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_activate_tp_ind,
+case when mva_intl_billing_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_billing_ind,
+case when mva_cruise_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_cruise_ind,
+case when mva_usage_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_usage_ind,
+case when mva_device_support_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_support_ind ,
+case when mva_tp_page_chat_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_tp_page_chat_tp_ind,
+case when mva_can_mex_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_can_mex_ind,
+case when mva_tp_enquiry_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_tp_enquiry_ind,
+case when mva_countries_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_countries_ind,
+case when mva_disable_tp_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_disable_tp_ind,
+case when mva_devices_ind=Last_session_time then 1 else 0 end as lst_session_mfapp_devices_ind
+from  
+(select *,
+greatest(coalesce(mva_activate_tp_ind,0),coalesce(mva_intl_billing_ind,0),coalesce(mva_cruise_ind,0),
+coalesce(mva_usage_ind,0),coalesce(mva_device_support_ind,0),coalesce(mva_tp_page_chat_tp_ind,0),coalesce(mva_can_mex_ind,0),coalesce(mva_tp_enquiry_ind,0),
+coalesce(mva_countries_ind,0),coalesce(mva_disable_tp_ind,0),coalesce(mva_devices_ind,0)) as Last_session_time
+from VZW_SOI_PRD_TBLS.ITP_SAD_MFAPP_DLY_CALL_TVL_INDICATORS_INTER_v1)z)v
+
+COMMENTS:  COMMENTS: this query assigns 1 and 0 to pg_visit_tm and null respectively under the pg topic columns and also selects the last pg tm/category out of the entire category
+so we have pgs visited in last 7 days as well as last pg visted 
+7 days- mva_topic_ind     last session-lst_session_mfapp_topic_ind

@@ -1,0 +1,205 @@
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_TVL_CALL_INT1;
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_TVL_CALL_INT1
+AS 
+select z.* from 
+(select
+distinct
+a.cust_id,
+a.mtn,
+a.acct_num,
+a.cust_line_seq_id,
+b.COUNTRY_CD, 
+b.SMS_REQ_DT,
+b.TVL_TS, 
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.cust_line_seq_id ORDER BY  TVL_TS DESC) AS tvl_SEQ 
+from VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE as a
+LEFT OUTER JOIN 
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_TRAVEL_BASE as b
+ON 
+a.cust_id=b.cust_id
+and a.acct_num=b.acct_num
+and a.mtn=b.mtn
+WHERE b.TVL_TS <=date_sub(current_timestamp(),1))z
+where country_cd is not null
+
+Comments:Creating the travel sequence of the scoring base customers till the current date in decreasing order (each travel as a row)
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALL_TVL_SEQ
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALL_TVL_SEQ
+AS 
+SELECT 
+CUST_ID, 
+ACCT_NUM, 
+MTN, 
+cust_line_seq_id,
+MAX(tvl_SEQ)  AS PREV_TVL_COUNT,
+MAX(CASE WHEN TVL_SEQ = 1 THEN TVL_TS END) AS TVL1, 
+MAX(CASE WHEN TVL_SEQ= 2 THEN TVL_TS END) AS TVL2, 
+MAX(CASE WHEN TVL_SEQ = 3 THEN TVL_TS END) AS TVL3, 
+MAX(CASE WHEN TVL_SEQ= 4 THEN TVL_TS END) AS TVL4, 
+MAX(CASE WHEN  TVL_SEQ = 5 THEN TVL_TS END) AS TVL5, 
+MAX(CASE WHEN  TVL_SEQ = 6 THEN TVL_TS END) AS TVL6, 
+MAX(CASE WHEN  TVL_SEQ = 7 THEN TVL_TS END) AS TVL7, 
+MAX(CASE WHEN  TVL_SEQ = 8 THEN TVL_TS END) AS TVL8, 
+MAX(CASE WHEN  TVL_SEQ = 9 THEN TVL_TS END) AS TVL9, 
+MAX(CASE WHEN  TVL_SEQ = 10 THEN TVL_TS END) AS TVL10, 
+MAX(CASE WHEN TVL_SEQ = 1 THEN COUNTRY_CD  END) AS CCD1, 
+MAX(CASE WHEN TVL_SEQ= 2 THEN  COUNTRY_CD END) AS CCD2, 
+MAX(CASE WHEN TVL_SEQ = 3 THEN COUNTRY_CD  END) AS CCD3, 
+MAX(CASE WHEN TVL_SEQ= 4 THEN COUNTRY_CD END) AS CCD4, 
+MAX(CASE WHEN  TVL_SEQ = 5 THEN COUNTRY_CD END) AS CCD5, 
+MAX(CASE WHEN  TVL_SEQ = 6 THEN COUNTRY_CD END) AS CCD6, 
+MAX(CASE WHEN  TVL_SEQ = 7 THEN COUNTRY_CD END) AS CCD7, 
+MAX(CASE WHEN  TVL_SEQ = 8 THEN COUNTRY_CD END) AS CCD8, 
+MAX(CASE WHEN  TVL_SEQ = 9 THEN COUNTRY_CD END) AS CCD9, 
+MAX(CASE WHEN  TVL_SEQ = 10 THEN COUNTRY_CD END) AS CCD10 
+FROM 
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_TVL_CALL_INT1
+WHERE TRIM(CUST_ID) IS NOT NULL
+AND TRIM(MTN) IS NOT NULL
+GROUP BY CUST_ID,MTN,ACCT_NUM,cust_line_seq_id;
+
+Comments: Concatenating the travel sequence into 1 row for each customer (tvl_ts, ccd, tvl_count) 
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1
+
+create table VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 
+as 
+select * from 
+(select
+distinct
+a.cust_id,
+a.mtn,
+a.acct_num,
+a.CUST_LINE_SEQ_ID,
+a.ivr_call_id,
+a.call_start_tm_stmp,
+c.MTN_STATUS_IND,
+ROW_NUMBER() OVER (PARTITION BY  A.CUST_ID,A.ACCT_NUM,A.MTN,a.CUST_LINE_SEQ_ID ORDER BY  a.call_start_tm_stmp DESC) AS CALL_SEQ 
+from VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_INTL_CALL_BASE as a
+inner join 
+VZW_UDA_PRD_ALLVM.CUST_ACCT_LINE_V AS C 
+on trim(C.CUST_ID)=trim(A.CUST_ID) 
+AND trim(C.ACCT_NUM)=trim(A.ACCT_NUM) 
+AND trim(C.CUST_LINE_SEQ_ID)=trim(A.CUST_LINE_SEQ_ID))z 
+where trim(MTN_STATUS_IND) = 'A'
+and call_start_tm_stmp<=date_sub(current_date(),1)
+
+Comments: Creating the call sequence of the scoring base customers till the current date in decreasing order (each call as a row)
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_SEQ
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_SEQ
+AS 
+SELECT 
+CUST_ID, 
+ACCT_NUM, 
+MTN, 
+CUST_LINE_SEQ_ID,
+MAX(call_start_tm_stmp) AS call_start_tm_stmp,
+COUNT(DISTINCT IVR_CALL_ID) AS PREV_CALL_COUNT,
+MAX(CASE WHEN CALL_SEQ = 1 THEN call_start_tm_stmp END) AS CALL_TS1, 
+MAX(CASE WHEN CALL_SEQ= 2 THEN call_start_tm_stmp END) AS CALL_TS2, 
+MAX(CASE WHEN CALL_SEQ = 3 THEN call_start_tm_stmp END) AS CALL_TS3, 
+MAX(CASE WHEN CALL_SEQ= 4 THEN call_start_tm_stmp END) AS CALL_TS4, 
+MAX(CASE WHEN  CALL_SEQ = 5 THEN call_start_tm_stmp END) AS CALL_TS5, 
+MAX(CASE WHEN  CALL_SEQ = 6 THEN call_start_tm_stmp END) AS CALL_TS6, 
+MAX(CASE WHEN  CALL_SEQ = 7 THEN call_start_tm_stmp END) AS CALL_TS7, 
+MAX(CASE WHEN  CALL_SEQ = 8 THEN call_start_tm_stmp END) AS CALL_TS8, 
+MAX(CASE WHEN  CALL_SEQ = 9 THEN call_start_tm_stmp END) AS CALL_TS9, 
+MAX(CASE WHEN  CALL_SEQ = 10 THEN call_start_tm_stmp END) AS CALL_TS10, 
+MAX(CASE WHEN CALL_SEQ = 1 THEN IVR_CALL_ID  END) AS IVR_CALL_ID1, 
+MAX(CASE WHEN CALL_SEQ= 2 THEN  IVR_CALL_ID END) AS IVR_CALL_ID2, 
+MAX(CASE WHEN CALL_SEQ = 3 THEN IVR_CALL_ID  END) AS IVR_CALL_ID3, 
+MAX(CASE WHEN CALL_SEQ= 4 THEN IVR_CALL_ID END) AS IVR_CALL_ID4, 
+MAX(CASE WHEN  CALL_SEQ = 5 THEN IVR_CALL_ID END) AS IVR_CALL_ID5, 
+MAX(CASE WHEN  CALL_SEQ = 6 THEN IVR_CALL_ID END) AS IVR_CALL_ID6, 
+MAX(CASE WHEN  CALL_SEQ = 7 THEN IVR_CALL_ID END) AS IVR_CALL_ID7, 
+MAX(CASE WHEN  CALL_SEQ = 8 THEN IVR_CALL_ID END) AS IVR_CALL_ID8, 
+MAX(CASE WHEN  CALL_SEQ = 9 THEN IVR_CALL_ID END) AS IVR_CALL_ID9, 
+MAX(CASE WHEN  CALL_SEQ = 10 THEN IVR_CALL_ID END) AS IVR_CALL_ID10
+FROM 
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1
+GROUP BY CUST_ID,MTN,ACCT_NUM,CUST_LINE_SEQ_ID;
+
+Comments: Concatenating the call sequence into 1 row for each customer (call_ts, ivr_call_id, prev_call_count) 
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL
+
+CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_TRVL_SEQ_FINAL
+AS 
+SELECT DISTINCT 
+A1.CUST_ID, 
+A1.ACCT_NUM, 
+A1.MTN, 
+A1.CUST_LINE_SEQ_ID,
+CASE WHEN A.PREV_TVL_COUNT IS NULL THEN 0
+     ELSE A.PREV_TVL_COUNT
+END AS PREV_TVL_COUNT,
+CASE WHEN B.PREV_CALL_COUNT IS NULL THEN 0
+     ELSE B.PREV_CALL_COUNT
+END AS PREV_CALL_COUNT,
+B.IVR_CALL_ID1, 
+B.IVR_CALL_ID2, 
+B.IVR_CALL_ID3, 
+B.IVR_CALL_ID4, 
+B.IVR_CALL_ID5, 
+B.IVR_CALL_ID6, 
+B.IVR_CALL_ID7, 
+B.IVR_CALL_ID8, 
+B.IVR_CALL_ID9, 
+B.IVR_CALL_ID10,
+B.CALL_TS1, 
+B.CALL_TS2, 
+B.CALL_TS3, 
+B.CALL_TS4, 
+B.CALL_TS5, 
+B.CALL_TS6, 
+B.CALL_TS7, 
+B.CALL_TS8, 
+B.CALL_TS9, 
+B.CALL_TS10, 
+A.TVL1, 
+A.TVL2, 
+A.TVL3, 
+A.TVL4, 
+A.TVL5, 
+A.TVL6, 
+A.TVL7, 
+A.TVL8, 
+A.TVL9, 
+A.TVL10, 
+A.CCD1, 
+A.CCD2, 
+A.CCD3, 
+A.CCD4, 
+A.CCD5, 
+A.CCD6, 
+A.CCD7, 
+A.CCD8, 
+A.CCD9, 
+A.CCD10 
+FROM 
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE as A1
+LEFT OUTER JOIN 
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALL_TVL_SEQ AS A
+ON A1.CUST_ID=A.CUST_ID
+AND A1.MTN=A.MTN
+AND A1.ACCT_NUM=A.ACCT_NUM
+AND A1.CUST_LINE_SEQ_ID=A.CUST_LINE_SEQ_ID
+LEFT OUTER JOIN 
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CALLS_SEQ AS B
+ON A1.CUST_ID=B.CUST_ID
+AND A1.MTN=B.MTN
+AND A1.ACCT_NUM=B.ACCT_NUM
+AND A1.CUST_LINE_SEQ_ID=B.CUST_LINE_SEQ_ID;
+
+Comments: Combining the call sequence and the travel sequence together into one for the customers being scored

@@ -1,0 +1,136 @@
+drop  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS1;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS2;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS3;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS4;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS5;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS6;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS7;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS8;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS9;
+drop  TABLE VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS10;
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS1
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary1_topic,
+B.SECONDARY_TOPIC as secondary1_topic 
+FROM  
+VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+WHERE A.CALL_SEQ=1
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS2
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary2_topic,
+B.SECONDARY_TOPIC as secondary2_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+WHERE A.CALL_SEQ=2
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS3
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary3_topic,
+B.SECONDARY_TOPIC as secondary3_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+WHERE A.CALL_SEQ=3
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS4
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary4_topic,
+B.SECONDARY_TOPIC as secondary4_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+WHERE A.CALL_SEQ=4
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS5
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary5_topic,
+B.SECONDARY_TOPIC as secondary5_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as b
+WHERE A.CALL_SEQ=5
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS6
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary6_topic,
+B.SECONDARY_TOPIC as secondary6_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+WHERE A.CALL_SEQ=6
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS7
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary7_topic,
+B.SECONDARY_TOPIC as secondary7_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+WHERE A.CALL_SEQ=7
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS8
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary8_topic,
+B.SECONDARY_TOPIC as secondary8_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+WHERE A.CALL_SEQ=8
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS9
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary9_topic,
+B.SECONDARY_TOPIC as secondary9_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+WHERE A.CALL_SEQ=9
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+spark.sql(""" CREATE  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALL_TVL_TOPICS10
+AS 
+SELECT 
+B.IVR_ID,
+B.PRIMARY_TOPIC as Primary10_topic,
+B.SECONDARY_TOPIC as secondary10_topic 
+FROM VZW_SOI_PRD_TBLS.ITP_SAD_INTER_DLY_CALLS_DRIVER_STRING_SEQ_INT1 as  A,
+vzw_soi_prd_tbls.vzsoi_intl_calltopics_v1 as B
+WHERE A.CALL_SEQ=10
+AND trim(A.IVR_call_id)=trim(B.IVR_ID) """)
+
+
+Comments: This query populates the call topics 1 - 10 for the previous calls made by the customers in our scoring base.

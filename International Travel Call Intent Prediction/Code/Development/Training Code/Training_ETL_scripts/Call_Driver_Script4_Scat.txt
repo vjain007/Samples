@@ -1,0 +1,246 @@
+# In this table we have explored the relevant urls for website visits and marked each url as relevant categories related to international and the others   which are not international as 'not_tp'
+  The condition "case when ((lower(pagename) like '%travel%' and lower(pagename) like '%pass%') or (lower(pagename) like '%travel%' and lower(pagename) like   '%plan%') or (lower(pagename) like '%international%')) then 1 else 0 end as tp_flag" is a pre check condition to evaluate if the customers are visiting     travel pass or international related pages. Post that we are further capturing the other pages like bill, support, device,usage etc.
+
+#The condition "lower(internal_srch_terms) like '%plan%') or (lower(internal_srch_terms) like '%international%')) then 1 else 0 end as tp_search_term_flag"
+ensures if the customer do a search for the terms'plan or international in the search bar.
+
+
+drop TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_CUST_scat_BASE;
+create table vzw_soi_prd_tbls.ITP_SAD_CUST_scat_BASE as
+select
+b.*,
+T.session_start_date,
+T.pg_vst_timestamp,
+T.session_start_tm,
+T.tp_flag,
+T.subevent1,
+T.tp_categories,
+T.visit_country,
+T.page_timespent
+from
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_CALL_BASE as b
+inner join
+(SELECT DISTINCT
+a.cust_id,
+a.mtn,
+substr(a.date_time,1,10) as session_start_date,
+a.date_time as pg_vst_timestamp,
+a.session_start_tm,
+tp_flag,
+timespent_pg,
+case when tp_flag=1 then
+case when a.chat_id!='' and tp_search_term_flag=1 then 'TP_Page-Chat_TP-Search'
+--when a.chat_id!='' and tp_search_term_flag=0 and search_ind=1 then 'TP_Page-Chat-General_Search'
+when tp_search_term_flag=1 then 'TP_Page-Search_TP'
+--when tp_search_term_flag=0 and search_ind=1 then 'TP_Page-General_Search'
+--when a.chat_id!='' then 'TP_Page-Chat'
+else 'TP_Enquiry' end
+when tp_flag=0 and (lower(pagename) like '%cruise%' or lower(pagename) like '%bahamas%' or lower(pagename) like '%honduras%' or lower(pagename) like '%alaska%')  then 'Cruise'
+when tp_flag=0 and tp_search_term_flag=1 then 'Page_General-TP_Search'
+when tp_flag=0 and lower(pagename) like '%bill%' or lower(pagename) like '%charge%' or lower(pagename) like '%autopay%'  or lower(pagename) like '%nextbillsummary%' then 'Bill_General_Search'
+when tp_flag=0 and tp_search_term_flag=0 and search_ind=1 then 'Page_General-General_Search'
+else 'no_international_vst' end as subevent1,
+case when tp_flag = 1 then
+case
+when (lower(pagename) like '%cruise%' or lower(pagename) like '%bahamas%' or lower(pagename) like '%honduras%' or lower(pagename) like '%alaska%') then 'Cruise'
+when  lower(pagename) like '%activat%' or lower(pagename) like '%add%'  then 'Activate_TP'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%prepaid%' then 'Faq_Prepaid'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%outside the us%' then 'Faq_OutsideUS'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%unlimited%' then 'Unlimited_Plan'
+when  lower(pagename) like  '%trip planner%' then 'TripPlanner'
+when  lower(pagename) like '%support%' then 'Faq_Support'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and lower(pagename) like '%about the plan%' then 'Unlimited_Plan'
+when (lower(pagename) like '%travelpass-faqs%' or lower(pagename) like '%travelpass-questions%') and (lower(pagename) not like '%about the plan%') and (lower(pagename) not like '%prepaid%') and (lower(pagename) not like '%outside the us%') and (lower(pagename) not like '%unlimited%') and (lower(pagename) not like '%trip planner%') and (lower(pagename) not like '%support%') then 'Faq_General'
+when lower(pagename) like '%travel-pass-video%' then 'TP_Video'
+when lower(pagename) like '%bill%' or lower(pagename) like '%charge%' or lower(pagename) like '%autopay%'  or lower(pagename) like '%nextbillsummary%' then 'Billing'
+when lower(pagename) like '%call%' or lower(pagename) like '%calling%' or lower(pagename) like '%data%' or lower(pagename) like '%roam%' or lower(pagename) like '%hotspot%' or lower(pagename) like '%wifi%' or lower(pagename) like '%travel-pass-usage%'then 'Usage'
+--when lower(pagename) like '%travel-pass-frustration%' or lower(pagename) like '%not%' and lower(pagename) like '%promised%' or lower(pagename) like '%travelpass-rip-off%' or lower(pagename) like '%opt-out%' or lower(pagename) like '%travel-pass-throttling%' or lower(pagename) like '%scam%'then 'TP_negative_Sentiment'
+when lower(pagename) like '%go-unlimited%' or lower(pagename) like '%unlimited-plan%'  then 'UnlimitedPlan'
+when lower(pagename) like '%multiple-devices%' or lower(pagename) like '%samsung%' or  lower(pagename) like '%iphone%' then 'Devices'
+--when lower(pagename) like '%travelpass-text%' then 'Inbound_Notification'
+--when lower(pagename) like '%travelpass-legal%' then 'Legal'
+when lower(pagename) like '%devicetroubleshootingassistant%' then 'settings'
+when lower(pagename) like '%travelpass countries%' or lower(pagename) like '%canada%' or lower(pagename) like '%mexico%' then 'Count_CAN_MEX'
+when lower(pagename) like '%international%' AND (lower(pagename) like '%faq%' or lower(pagename) like '%question%') then 'Faq_International'
+else 'TP_Enquiry' end
+else 'TP_Enquiry' end as tp_categories,
+case when lower(a.geo_country)!='usa' then 'OutsideUS' else 'InsideUS' end as visit_country,
+geo_country,
+case when timespent_pg <=60 then 'lt_1min'
+when  timespent_pg >60 and timespent_pg <=240 then 'bw_1_4min'
+when  timespent_pg >240 and timespent_pg <=600 then 'bw_4_10min'
+when  timespent_pg >600 and timespent_pg <=1800 then 'bw_10_30min'
+when  timespent_pg >1800 then 'gt_30min'
+end as page_timespent FROM (select * ,
+case when ((lower(pagename) like '%travel%' and lower(pagename) like '%pass%') or (lower(pagename) like '%travel%' and lower(pagename) like '%plan%') or (lower(pagename) like '%international%')) then 1 else 0 end as tp_flag,
+case when ((lower(internal_srch_terms) like '%travel%' and lower(internal_srch_terms) like '%pass%') or (lower(internal_srch_terms) like '%travel%' and lower(internal_srch_terms) like '%plan%') or (lower(internal_srch_terms) like '%international%')) then 1 else 0 end as tp_search_term_flag,
+case when internal_srch_terms!='' and internal_srch_terms is not null then 1 else 0 end as search_ind
+from VZW_SOI_PRD_TBLS.VZSOI_SEMANTIC_SCAT_SUMMARY
+where (cust_id is not null))a)T
+where T.cust_id=b.cust_id
+and T.mtn=b.mtn
+and trim(b.cust_id) is not null 
+and trim(b.mtn) is not null
+
+
+#In this table we are removing the pages which are not related to international categories ('not_tp') and also device related informations and reducing the whole base to a subset having informations only relevant to international visits.
+Please note that we are only tracking those visits which are 7 days before the reference call time stamp.
+Also we are creating a sequence for the categories with respect to 'ivr_call_id'&'tp_categories' to remove the redundancies in the webpage visits. For example if a customer has visited similar pages between a shorter duration of time then we are retaining the latest visit information as per the session_start_tm
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS_INTER
+ 
+create table VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS_INTER as 
+select a.*
+from
+(select
+a.cust_id,
+a.mtn,
+a.acct_num,
+a.ivr_call_id,
+a.call_start_tm_stmp,
+a.call_start_dt,
+a.session_start_date,
+a.pg_vst_timestamp,
+a.session_start_tm,
+a.tp_categories as category_new,
+a.subevent1
+from 
+(select *,
+ROW_NUMBER() OVER (PARTITION BY CUST_ID,mtn,ivr_call_id,tp_categories order by session_start_tm) AS scat_seq
+from 
+(select * from 
+vzw_soi_prd_tbls.ITP_SAD_CUST_scat_BASE 
+where lower(tp_categories) not in ('devices','not_tp'))T)a
+where scat_seq=1)a
+inner join
+VZW_SOI_PRD_TBLS.ITP_SAD_CALLS_SEQ as b
+where a.cust_id=b.cust_id
+and a.mtn=b.mtn
+and a.session_start_tm between date_sub(b.call_start_tm_stmp,7) and b.call_start_tm_stmp
+and a.ivr_call_id = b.ivr_call_id
+
+
+#---------------------------------------------------------------------#query-2------------------------------------------------------------------#
+
+In this table we are transposing the indicators so that we have all the sessions visited by a customer in one row before 7 days of the call.
+
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS_INTER_v1 ;
+
+create table VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS_INTER_v1
+as 
+select x.cust_id,x.mtn,x.call_start_tm_stmp,x.ivr_call_id,
+COLLECT_SET(activate_tp)[0] as MVO_activate_tp_ind,
+COLLECT_SET(intl_Billing)[0] as MVO_intl_billing_ind,
+COLLECT_SET(tripplanner)[0] as MVO_tripplanner_ind,
+COLLECT_SET(cruise)[0] as MVO_cruise_ind,
+COLLECT_SET(tp_video)[0] as MVO_tp_video_ind,
+COLLECT_SET(usage)[0] as MVO_usage_ind,
+COLLECT_SET(faq_international)[0] as MVO_faq_international_ind,
+COLLECT_SET(faq_support)[0] as MVO_device_support_ind,
+COLLECT_SET(faq_general)[0] as MVO_faq_general_ind,
+COLLECT_SET(faq_outsideus)[0] as MVO_faq_outsideus_ind,
+COLLECT_SET( tp_page_chat_tp_search)[0] as MVO_tp_page_chat_tp_ind,
+COLLECT_SET(settings)[0] as MVO_settings_ind,
+COLLECT_SET(can_mex)[0] as MVO_can_mex_ind,
+COLLECT_SET(unlimitedplan)[0] as MVO_unlimitedplans_ind,
+COLLECT_SET(tp_enquiry)[0] as MVO_tp_enquiry_ind,
+COLLECT_SET(faq_prepaid)[0] as MVO_faq_prepaid_ind
+from
+(select cust_id,
+mtn,
+call_start_tm_stmp,
+ivr_call_id,
+case when lower(category_new) ='activate_tp' then session_start_tm end as  activate_tp,
+case when lower(category_new) = 'billing' then session_start_tm end as  intl_Billing,
+case when lower(category_new) = 'tripplanner' then session_start_tm end as  tripplanner,
+case when lower(category_new) = 'cruise' then session_start_tm end as  cruise,
+case when lower(category_new) = 'tp_video' then session_start_tm end as  tp_video,
+case when lower(category_new) = 'page_general-tp_search' then session_start_tm end as  page_general_tp_search,
+case when lower(category_new) = 'usage' then session_start_tm end as  usage,
+case when lower(category_new) = 'faq_international' then session_start_tm end as  faq_international,
+case when lower(category_new) = 'faq_support' then session_start_tm end as  faq_support,
+case when lower(category_new) = 'faq_general' then session_start_tm end as  faq_general,
+case when lower(category_new) = 'faq_outsideus' then session_start_tm end as  faq_outsideus,
+case when lower(category_new) = 'tp_page-chat_tp-search' then session_start_tm end as  tp_page_chat_tp_search,
+case when lower(category_new) = 'settings' then session_start_tm end as settings,
+case when lower(category_new) = 'count_can_mex' then session_start_tm end as can_mex,
+case when lower(category_new) = 'unlimitedplan' then session_start_tm end as unlimitedplan,
+case when lower(category_new) = 'tp_enquiry' then session_start_tm end as tp_enquiry,
+case when lower(category_new) = 'faq_prepaid' then session_start_tm end as faq_prepaid
+from VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS_INTER a where a.session_start_tm < a.call_start_tm_stmp ) x
+group by   cust_id,mtn,call_start_tm_stmp,ivr_call_id
+
+
+#------------------------------------------------------------query-3---------------------------------------------------------#
+
+In this table we have calculated the last session time by taking the maximum date time of all the sessions that took place 7 days before the call.
+Later we are also creating the final indicator colums using case statements.
+
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS ;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS
+as 
+select 
+cust_id,
+mtn,
+call_start_tm_stmp,
+ivr_call_id,
+case when mvo_activate_tp_ind is not null then 1 else 0 end as mvo_activate_tp_ind,
+case when mvo_intl_billing_ind is not null then 1 else 0 end as mvo_intl_billing_ind,
+case when mvo_tripplanner_ind is not null then 1 else 0 end as mvo_tripplanner_ind,
+case when mvo_cruise_ind is not null then 1 else 0 end as mvo_cruise_ind,
+case when mvo_tp_video_ind is not null then 1 else 0 end as mvo_tp_video_ind,
+case when mvo_usage_ind is not null then 1 else 0 end as mvo_usage_ind,
+case when mvo_faq_international_ind is not null then 1 else 0 end as mvo_faq_international_ind,
+case when mvo_device_support_ind is not null then 1 else 0 end as mvo_device_support_ind,
+case when mvo_faq_general_ind is not null then 1 else 0 end as mvo_faq_general_ind,
+case when mvo_faq_outsideus_ind is not null then 1 else 0 end as mvo_faq_outsideus_ind,
+case when mvo_tp_page_chat_tp_ind is not null then 1 else 0 end as mvo_tp_page_chat_tp_ind,
+case when mvo_settings_ind is not null then 1 else 0 end as mvo_settings_ind,
+case when mvo_can_mex_ind is not null then 1 else 0 end as mvo_can_mex_ind,
+case when mvo_unlimitedplans_ind is not null then 1 else 0 end as mvo_unlimitedplans_ind,
+case when mvo_tp_enquiry_ind is not null then 1 else 0 end as mvo_tp_enquiry_ind,
+Last_session_time as mvo_last_pg_vst_time,
+lst_session_activate_tp_ind,
+lst_session_billing_ind,
+lst_session_tripplanner_ind,
+lst_session_cruise_ind,
+lst_session_tp_video_vstd_ind,
+lst_session_usage_ind,
+lst_session_faq_international_ind,
+lst_session_device_support_ind,
+lst_session_faq_general_ind,
+lst_session_faq_outsideus_ind,
+lst_session_tp_page_chat_tp_search_ind,
+lst_session_settings_ind,
+lst_session_can_mex_ind,
+lst_session_unlimitedplan_ind,
+lst_session_tp_enquiry_ind,
+lst_session_faq_prepaid_ind
+from 
+(select *,
+case when mvo_activate_tp_ind=Last_session_time then 1 else 0 end as lst_session_activate_tp_ind,
+case when mvo_intl_billing_ind=Last_session_time then 1 else 0 end as lst_session_billing_ind,
+case when mvo_tripplanner_ind=Last_session_time then 1 else 0 end as lst_session_tripplanner_ind,
+case when mvo_cruise_ind=Last_session_time then 1 else 0 end as lst_session_cruise_ind,
+case when mvo_tp_video_ind=Last_session_time then 1 else 0 end as lst_session_tp_video_vstd_ind,
+case when mvo_usage_ind=Last_session_time then 1 else 0 end as lst_session_usage_ind,
+case when mvo_faq_international_ind=Last_session_time then 1 else 0 end as lst_session_faq_international_ind,
+case when mvo_device_support_ind=Last_session_time then 1 else 0 end as lst_session_device_support_ind,
+case when mvo_faq_general_ind=Last_session_time then 1 else 0 end as lst_session_faq_general_ind,
+case when mvo_faq_outsideus_ind=Last_session_time then 1 else 0 end as lst_session_faq_outsideus_ind,
+case when mvo_tp_page_chat_tp_ind=Last_session_time then 1 else 0 end as lst_session_tp_page_chat_tp_search_ind,
+case when mvo_settings_ind=Last_session_time then 1 else 0 end as lst_session_settings_ind,
+case when mvo_can_mex_ind=Last_session_time then 1 else 0 end as lst_session_can_mex_ind,
+case when mvo_unlimitedplans_ind=Last_session_time then 1 else 0 end as lst_session_unlimitedplan_ind,
+case when mvo_tp_enquiry_ind=Last_session_time then 1 else 0 end as lst_session_tp_enquiry_ind,
+case when mvo_faq_prepaid_ind=Last_session_time then 1 else 0 end as lst_session_faq_prepaid_ind
+from 
+(select *,
+greatest(coalesce(mvo_activate_tp_ind,0),coalesce(mvo_intl_billing_ind,0),coalesce(mvo_tripplanner_ind,0),
+coalesce(mvo_cruise_ind,0),coalesce(mvo_tp_video_ind,0),coalesce(mvo_usage_ind,0),coalesce(mvo_faq_international_ind,0),coalesce(mvo_device_support_ind,0),
+coalesce(mvo_faq_general_ind,0),coalesce(mvo_faq_outsideus_ind,0),coalesce(mvo_tp_page_chat_tp_ind,0),
+coalesce(mvo_tp_enquiry_ind,0),coalesce(mvo_settings_ind,0),coalesce(mvo_can_mex_ind,0),coalesce(mvo_unlimitedplans_ind,0),coalesce(mvo_faq_prepaid_ind,0)) as Last_session_time
+from VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS_INTER_v1)z)v
+

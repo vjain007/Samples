@@ -1,0 +1,151 @@
+Sitecat = Online web browser visits of the customer
+#-----------------------------------------------query -1---------------------------------------------------------#
+
+drop  TABLE  VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER;
+
+create table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER 
+as 
+select a.*
+from 
+VZW_SOI_PRD_TBLS.ITP_SAD_DLY_CUST_BASE b
+inner join 
+(select
+a.cust_id,
+a.mtn,
+a.session_start_date,
+a.pg_vst_timestamp,
+a.session_start_tm,
+a.visit_country,
+a.tp_categories as category_new,
+a.subevent1,
+a.process_dt
+from 
+(select *,
+ROW_NUMBER() OVER (PARTITION BY CUST_ID,mtn,tp_categories order by session_start_tm) AS scat_seq
+from 
+(select * from 
+VZW_SOI_PRD_TBLS.ITP_SAD_CUST_DLY_SCAT_DESC_BASE)T)a
+where scat_seq=1)a
+on a.cust_id=b.cust_id
+and a.mtn=b.mtn
+
+COMMENTS: this query orders the intl visits (in past 7 days) of the customer in our base in sequence and selects every unique visit category pg in sequence if their were multipile pages visited
+for example if customer visited  pg1 pg4 pg2 pg1 pg3 pg4, this query gives pg1 pg4 pg2 pg3 
+#----------------------------------------------------------query -2--------------------------------------------------------#
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_v1 ;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER_v1
+as 
+select x.cust_id,x.mtn,
+COLLECT_SET(activate_tp)[0] as MVO_activate_tp_ind,
+COLLECT_SET(intl_Billing)[0] as MVO_intl_billing_ind,
+COLLECT_SET(tripplanner)[0] as MVO_tripplanner_ind,
+COLLECT_SET(cruise)[0] as MVO_cruise_ind,
+COLLECT_SET(tp_video)[0] as MVO_tp_video_ind,
+COLLECT_SET(usage)[0] as MVO_usage_ind,
+COLLECT_SET(faq_international)[0] as MVO_faq_international_ind,
+COLLECT_SET(faq_support)[0] as MVO_device_support_ind,
+COLLECT_SET(faq_general)[0] as MVO_faq_general_ind,
+COLLECT_SET(faq_outsideus)[0] as MVO_faq_outsideus_ind,
+COLLECT_SET( tp_page_chat_tp_search)[0] as MVO_tp_page_chat_tp_ind,
+COLLECT_SET(settings)[0] as MVO_settings_ind,
+COLLECT_SET(can_mex)[0] as MVO_can_mex_ind,
+COLLECT_SET(unlimitedplan)[0] as MVO_unlimitedplans_ind,
+COLLECT_SET(tp_enquiry)[0] as MVO_tp_enquiry_ind,
+COLLECT_SET(faq_prepaid)[0] as MVO_faq_prepaid_ind 
+from
+(select cust_id,
+mtn,
+case when lower(category_new) ='activate_tp' then session_start_tm end as  activate_tp,
+case when lower(category_new) = 'billing' then session_start_tm end as  intl_Billing,
+case when lower(category_new) = 'tripplanner' then session_start_tm end as  tripplanner,
+case when lower(category_new) = 'cruise' then session_start_tm end as  cruise,
+case when lower(category_new) = 'tp_video' then session_start_tm end as  tp_video,
+case when lower(category_new) = 'page_general-tp_search' then session_start_tm end as  page_general_tp_search,
+case when lower(category_new) = 'usage' then session_start_tm end as  usage,
+case when lower(category_new) = 'faq_international' then session_start_tm end as  faq_international,
+case when lower(category_new) = 'faq_support' then session_start_tm end as  faq_support,
+case when lower(category_new) = 'faq_general' then session_start_tm end as  faq_general,
+case when lower(category_new) = 'faq_outsideus' then session_start_tm end as  faq_outsideus,
+case when lower(category_new) = 'tp_page-chat_tp-search' then session_start_tm end as  tp_page_chat_tp_search,
+case when lower(category_new) = 'settings' then session_start_tm end as settings,
+case when lower(category_new) = 'count_can_mex' then session_start_tm end as can_mex,
+case when lower(category_new) = 'unlimitedplan' then session_start_tm end as unlimitedplan,
+case when lower(category_new) = 'tp_enquiry' then session_start_tm end as tp_enquiry,
+case when lower(category_new) = 'faq_prepaid' then session_start_tm end as faq_prepaid
+   
+from VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS_INTER) x
+group by cust_id,mtn
+
+
+COMMENTS: this query pivots the sequence of pg visits into a row for each customer and assigns the session start time of to whichever pg was visited otherwise null
+#-------------------------------------------------------query-3--------------------------------------------------------#
+
+drop table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS;
+create table VZW_SOI_PRD_TBLS.ITP_SAD_DLY_SCCAT_CALL_TVL_INDICATORS
+as
+select 
+cust_id,
+mtn,
+Last_session_time as mvo_last_session_time,
+case when mvo_activate_tp_ind is not null then 1 else 0 end as mvo_activate_tp_ind,
+case when mvo_intl_billing_ind is not null then 1 else 0 end as mvo_intl_billing_ind,
+case when mvo_tripplanner_ind is not null then 1 else 0 end as mvo_tripplanner_ind,
+case when mvo_cruise_ind is not null then 1 else 0 end as mvo_cruise_ind,
+case when mvo_tp_video_ind is not null then 1 else 0 end as mvo_tp_video_ind,
+case when mvo_usage_ind is not null then 1 else 0 end as mvo_usage_ind,
+case when mvo_faq_international_ind is not null then 1 else 0 end as mvo_faq_international_ind,
+case when mvo_device_support_ind is not null then 1 else 0 end as mvo_device_support_ind,
+case when mvo_faq_general_ind is not null then 1 else 0 end as mvo_faq_general_ind,
+case when mvo_faq_outsideus_ind is not null then 1 else 0 end as mvo_faq_outsideus_ind,
+case when mvo_tp_page_chat_tp_ind is not null then 1 else 0 end as mvo_tp_page_chat_tp_ind,
+case when mvo_settings_ind is not null then 1 else 0 end as mvo_settings_ind,
+case when mvo_can_mex_ind is not null then 1 else 0 end as mvo_can_mex_ind,
+case when mvo_unlimitedplans_ind is not null then 1 else 0 end as mvo_unlimitedplans_ind,
+case when mvo_tp_enquiry_ind is not null then 1 else 0 end as mvo_tp_enquiry_ind,
+case when mvo_faq_prepaid_ind is not null then 1 else 0 end as mvo_faq_prepaid_ind,
+lst_session_activate_tp_ind,
+lst_session_billing_ind,
+lst_session_tripplanner_ind,
+lst_session_cruise_ind,
+lst_session_tp_video_vstd_ind,
+lst_session_usage_ind,
+lst_session_faq_international_ind,
+lst_session_device_support_ind,
+lst_session_faq_general_ind,
+lst_session_faq_outsideus_ind,
+lst_session_tp_page_chat_tp_search_ind,
+lst_session_settings_ind,
+lst_session_can_mex_ind,
+lst_session_unlimitedplan_ind,
+lst_session_tp_enquiry_ind,
+lst_session_faq_prepaid_ind
+from 
+(select *,
+case when mvo_activate_tp_ind=Last_session_time then 1 else 0 end as lst_session_activate_tp_ind,
+case when mvo_intl_billing_ind=Last_session_time then 1 else 0 end as lst_session_billing_ind,
+case when mvo_tripplanner_ind=Last_session_time then 1 else 0 end as lst_session_tripplanner_ind,
+case when mvo_cruise_ind=Last_session_time then 1 else 0 end as lst_session_cruise_ind,
+case when mvo_tp_video_ind=Last_session_time then 1 else 0 end as lst_session_tp_video_vstd_ind,
+case when mvo_usage_ind=Last_session_time then 1 else 0 end as lst_session_usage_ind,
+case when mvo_faq_international_ind=Last_session_time then 1 else 0 end as lst_session_faq_international_ind,
+case when mvo_device_support_ind=Last_session_time then 1 else 0 end as lst_session_device_support_ind,
+case when mvo_faq_general_ind=Last_session_time then 1 else 0 end as lst_session_faq_general_ind,
+case when mvo_faq_outsideus_ind=Last_session_time then 1 else 0 end as lst_session_faq_outsideus_ind,
+case when mvo_tp_page_chat_tp_ind=Last_session_time then 1 else 0 end as lst_session_tp_page_chat_tp_search_ind,
+case when mvo_settings_ind=Last_session_time then 1 else 0 end as lst_session_settings_ind,
+case when mvo_can_mex_ind=Last_session_time then 1 else 0 end as lst_session_can_mex_ind,
+case when mvo_unlimitedplans_ind=Last_session_time then 1 else 0 end as lst_session_unlimitedplan_ind,
+case when mvo_tp_enquiry_ind=Last_session_time then 1 else 0 end as lst_session_tp_enquiry_ind,
+case when mvo_faq_prepaid_ind=Last_session_time then 1 else 0 end as lst_session_faq_prepaid_ind
+from (select *,
+greatest(coalesce(mvo_activate_tp_ind,0),coalesce(mvo_intl_billing_ind,0),coalesce(mvo_tripplanner_ind,0),
+coalesce(mvo_cruise_ind,0),coalesce(mvo_tp_video_ind,0),coalesce(mvo_usage_ind,0),coalesce(mvo_faq_international_ind,0),coalesce(mvo_device_support_ind,0),
+coalesce(mvo_faq_general_ind,0),coalesce(mvo_faq_outsideus_ind,0),coalesce(mvo_tp_page_chat_tp_ind,0),
+coalesce(mvo_tp_enquiry_ind,0),coalesce(mvo_settings_ind,0),coalesce(mvo_can_mex_ind,0),coalesce(mvo_unlimitedplans_ind,0),coalesce(mvo_faq_prepaid_ind,0)) as Last_session_time
+from VZW_SOI_PRD_TBLS.ITP_SAD_SCCAT_CALL_TVL_INDICATORS_INTER_v1)z)v
+
+
+COMMENTS: this query assigns 1 and 0 to session date and null respectively under the pg topic columns and also selects the last session tm &category out of the entire category
+so we have pgs visited in last 7 days as well as pgs visted in last session both
+7 days- mvo_topic_ind     last session-lst_session_topic_ind
